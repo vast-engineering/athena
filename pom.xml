@@ -1,5 +1,5 @@
 <!--
-  ~ Copyright Vast 2012. All Rights Reserved.
+  ~ Copyright Vast 2013. All Rights Reserved.
   ~
   ~ http://www.vast.com
   -->
@@ -7,21 +7,17 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <parent>
-        <groupId>com.vast.common</groupId>
-        <artifactId>corporate-pom-min</artifactId>
-        <version>2.0.0</version>
-    </parent>
-
     <groupId>com.vast</groupId>
-    <artifactId>verona</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <artifactId>athena</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
     <packaging>scala-jar</packaging>
 
-    <name>Verona</name>
+    <name>Athena</name>
     <description>A fully asynchronous client library for Cassandra.</description>
 
     <properties>
+
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
         <!-- ensure the java and scala compilers generate the right bytecode level -->
         <maven.compiler.source>1.6</maven.compiler.source>
@@ -90,6 +86,7 @@
             <version>1.0.1</version>
         </dependency>
 
+        <!-- test dependencies -->
         <dependency>
             <groupId>com.typesafe.akka</groupId>
             <artifactId>akka-slf4j_${scala.major.version}</artifactId>
@@ -155,6 +152,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-source-plugin</artifactId>
+                <version>2.2.1</version>
                 <executions>
                     <execution>
                         <goals>
