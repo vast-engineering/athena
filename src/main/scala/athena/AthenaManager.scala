@@ -28,13 +28,13 @@ private[athena] class AthenaManager(globalSettings: AthenaExt#Settings) extends 
 
     case setup: NodeConnectorSetup ⇒
       val connector = context.actorOf(
-        props = Props[NodeConnector](new NodeConnector(setup.normalized)),
+        props = NodeConnector.props(setup.normalized),
         name = "node-connector-" + nodeConnectorCounter.next())
       sender.tell(Athena.NodeConnectorInfo(connector, setup), connector)
 
     case setup: ClusterConnectorSetup =>
       val connector = context.actorOf(
-        props = Props[ClusterConnector](new ClusterConnector(setup.normalized)),
+        props = ClusterConnector.props(setup.normalized),
         name = "cluster-connector-" + clusterConnectorCounter.next()
       )
       sender.tell(Athena.ClusterConnectorInfo(connector, setup), connector)

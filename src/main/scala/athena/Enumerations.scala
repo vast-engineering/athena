@@ -1,4 +1,4 @@
-package athena.data
+package athena
 
 object Consistency extends Enumeration {
   type Consistency = Value

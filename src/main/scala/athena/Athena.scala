@@ -3,9 +3,9 @@ package athena
 import akka.actor._
 
 import com.typesafe.config.Config
-import java.net.InetSocketAddress
+import java.net.{InetAddress, InetSocketAddress}
 
-import athena.data.Consistency._
+import Consistency._
 
 import spray.util.actorSystem
 
@@ -44,11 +44,12 @@ object Athena extends ExtensionKey[AthenaExt] {
    */
   case class Connect(remoteAddress: InetSocketAddress,
                      keyspace: Option[String],
-                     settings: Option[ConnectionSettings]) extends ExtensionCommand
+                     settings: Option[ConnectionSettings],
+                     eventHandler: Option[ActorRef]) extends ExtensionCommand
   object Connect {
     def apply(host: String, port: Int, keyspace: Option[String], settings: Option[ConnectionSettings] = None): Connect = {
       val address = new InetSocketAddress(host, port)
-      Connect(address, keyspace, settings)
+      Connect(address, keyspace, settings, None)
     }
   }
 
@@ -59,8 +60,11 @@ object Athena extends ExtensionKey[AthenaExt] {
                                 keyspace: Option[String],
                                 settings: Option[NodeConnectorSettings] = None) extends ExtensionCommand {
     private[athena] def normalized(implicit refFactory: ActorRefFactory) =
-      if (settings.isDefined) this
-      else copy(settings = Some(NodeConnectorSettings(actorSystem)))
+      if (settings.isDefined) {
+        this
+      } else {
+        copy(settings = Some(NodeConnectorSettings(actorSystem)))
+      }
   }
   
   object NodeConnectorSetup {
@@ -73,7 +77,8 @@ object Athena extends ExtensionKey[AthenaExt] {
   /**
    * A command to initiate a connection to a cluster of Cassandra nodes
    */
-  case class ClusterConnectorSetup(name: String, initialHosts: Set[InetSocketAddress], settings: Option[ClusterConnectorSettings] = None) extends ExtensionCommand {
+  case class ClusterConnectorSetup(initialHosts: Set[InetAddress], port: Int, keyspace: Option[String],
+                                   settings: Option[ClusterConnectorSettings] = None) extends ExtensionCommand {
     private[athena] def normalized(implicit refFactory: ActorRefFactory) =
       if (settings.isDefined) this
       else copy(settings = Some(ClusterConnectorSettings(actorSystem)))
@@ -134,6 +139,13 @@ object Athena extends ExtensionKey[AthenaExt] {
   case class Connected(remoteAddress: InetSocketAddress, localAddress: InetSocketAddress) extends Event
 
   /**
+   * Sent on successful creation of a node or cluster connector.
+   */
+  case class NodeConnectorInfo(nodeConnector: ActorRef, setup: NodeConnectorSetup) extends Event
+  case class ClusterConnectorInfo(clusterConnector: ActorRef, setup: ClusterConnectorSetup) extends Event
+
+
+  /**
    * This is the common interface for all events which indicate that a connection
    * has been closed
    */
@@ -189,23 +201,21 @@ object Athena extends ExtensionKey[AthenaExt] {
    */
   case class CommandFailed(cmd: Command) extends Event
 
-  case class NodeConnectorInfo(nodeConnector: ActorRef, setup: NodeConnectorSetup)
-  case class ClusterConnectorInfo(clusterConnector: ActorRef, setup: ClusterConnectorSetup)
 
 
   //exceptions
-  class AthenaException(message: String, cause: Throwable) extends RuntimeException(message, cause) {
-    def this(message: String) { this(message, null) }
-    def this(cause: Throwable) { this(null, cause) }
-    def this() { this(null, null) }
+  class AthenaException(message: String, cause: Option[Throwable]) extends RuntimeException(message, cause.orNull) {
+    def this(message: String) { this(message, None) }
+    def this(cause: Throwable) { this(null, Some(cause)) }
+    def this() { this(null, None) }
   }
 
   /**
    * Thrown when the connector experiences an unrecoverable error, or has reached an inconsistent state. This exception
    * normally signifies an internal implementation problem or bug.
    */
-  class InternalException(message: String, cause: Throwable) extends AthenaException(message, cause) {
-    def this(message: String) { this(message, null) }
+  class InternalException(message: String, cause: Option[Throwable]) extends AthenaException(message, cause) {
+    def this(message: String) { this(message, None) }
   }
 
   class ConnectionException(message: String) extends AthenaException(message)
@@ -213,8 +223,7 @@ object Athena extends ExtensionKey[AthenaExt] {
 
   class ConnectionAttemptFailedException(val host: String, val port: Int) extends ConnectionException(s"Connection attempt to $host:$port failed")
 
-//  class RequestTimeoutException(val request: CassandraRequest, message: String)
-//    extends AthenaException(message)
+  class NoHostAvailableException(message: String, val errors: Map[InetAddress, Any]) extends AthenaException(message)
 
   class QueryExecutionException(message: String) extends AthenaException(message)
   class UnavailableException(message: String, val consistency: Consistency, val required: Int, val alive: Int)

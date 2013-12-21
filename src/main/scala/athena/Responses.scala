@@ -1,14 +1,16 @@
 package athena
 
 import akka.util.ByteString
-import athena.Requests.Statement
+import athena.Requests.{AthenaRequest, Statement}
+import athena.data.ColumnDef
 
-sealed trait AthenaResponse {
-  def request: AthenaRequest
-  def isFailure: Boolean
-}
 
 object Responses {
+
+  sealed trait AthenaResponse {
+    def request: AthenaRequest
+    def isFailure: Boolean
+  }
 
   sealed trait FailureResponse extends AthenaResponse {
     def isFailure: Boolean = true

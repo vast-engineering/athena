@@ -2,7 +2,7 @@ package athena.connector.pipeline.messages
 
 import athena._
 import athena.connector._
-import athena.data.{DataType, Metadata}
+import athena.data.{ColumnDef, DataType, Metadata}
 import athena.util.ByteStringUtils
 import CassandraResponses._
 
@@ -25,40 +25,36 @@ private object ResultDecoder extends Logging {
     KeyspaceResult(ByteStringUtils.readString(it))
   }
 
+  /**
+   * Decode a rows result. A rows result consists of the following, in order
+   *
+   * metadata - rows_count - rows
+   *
+   * Where metadata is decoded as below, rows_count is an int, and rows is
+   * (rows_count * metadata.columnsCount) [byte] entries.
+   *
+   * For more details, see section 4.2.5.2 at
+   * https://raw.github.com/apache/cassandra/trunk/doc/native_protocol_v2.spec
+   *
+   */
   def decodeRows(it: ByteIterator)(implicit byteOrder: ByteOrder): RowsResult = {
     val metadata = decodeMetaData(it)
     val rowCount = it.getInt
+    val columnCount = metadata.columnsCount
 
-    val remaining = it.toByteString
-
-    //split the front of the ByteString into a number of chunks, returning the remainder
-    @tailrec def splitByteString(chunks: Int, input: ByteString, acc: IndexedSeq[ByteString]): (IndexedSeq[ByteString], ByteString) = {
-      if (chunks == 0) {
-        (acc, input)
-      } else {
-        val it = input.iterator
-        val size = it.getInt
-        val (data: ByteString, remainder: ByteString) = it.toByteString.splitAt(size)
-        splitByteString(chunks - 1, remainder, acc :+ data)
+    val resultBuilder = Seq.newBuilder[IndexedSeq[ByteString]]
+    var rowIdx = 0
+    while(rowIdx < rowCount) {
+      var colIdx = 0
+      val rowBuilder = IndexedSeq.newBuilder[ByteString]
+      while(colIdx < columnCount) {
+        rowBuilder += ByteStringUtils.readBytes(it)
+        colIdx = colIdx + 1
       }
+      resultBuilder += rowBuilder.result()
+      rowIdx = rowIdx + 1
     }
-
-    @tailrec def splitRows(rows: Int, input: ByteString, acc: List[IndexedSeq[ByteString]]): List[IndexedSeq[ByteString]] = {
-      if (rows == 0) {
-        if (!input.isEmpty) {
-          //uh-oh, should have exhausted the input
-          logger.error("Likely bug in Rows result parser - input not exhausted.")
-          throw new Athena.InternalException("Rows input not exhausted.")
-        }
-        acc.reverse
-      } else {
-        val (row, remainder) = splitByteString(metadata.columnsCount, input, IndexedSeq())
-        splitRows(rows - 1, remainder, row :: acc)
-      }
-    }
-
-    val rowData = splitRows(rowCount, remaining, Nil)
-    RowsResult(metadata, rowData)
+    RowsResult(metadata, resultBuilder.result())
   }
 
   def decodeMetaData(it: ByteIterator)(implicit byteOrder: ByteOrder): Metadata = {
@@ -67,8 +63,7 @@ private object ResultDecoder extends Logging {
     val columnsCount = it.getInt
 
     val pagingState = if ((flags & HasMorePagesFlag) != 0) {
-      val size = it.getInt
-      Some(ByteString(it.take(size).toArray))
+      Some(ByteStringUtils.readBytes(it))
     } else {
       None
     }
@@ -84,19 +79,18 @@ private object ResultDecoder extends Logging {
         (None, None)
       }
 
-      //mutable collection, so sue me
-      val columnDefs = new collection.mutable.ArrayBuffer[ColumnDef](columnsCount)
+      val columnDefs = IndexedSeq.newBuilder[ColumnDef]
       var index = 0
       while (index < columnsCount) {
         val keyspaceName = defaultKeyspaceName.getOrElse(ByteStringUtils.readString(it))
         val tableName = defaultTableName.getOrElse(ByteStringUtils.readString(it))
         val name = ByteStringUtils.readString(it)
         val dataType = DataType.fromByteIterator(it)
-        columnDefs.append(ColumnDef(keyspaceName, tableName, name, dataType))
+        columnDefs += ColumnDef(keyspaceName, tableName, name, dataType)
         index = index + 1
       }
 
-      Some(columnDefs)
+      Some(columnDefs.result())
     }
 
     Metadata(columnsCount, columnDefs, pagingState)

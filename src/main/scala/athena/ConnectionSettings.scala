@@ -5,11 +5,10 @@ import scala.concurrent.duration.Duration
 import spray.util._
 import com.typesafe.config.Config
 import athena.util.SettingsBase
-import athena.data.{SerialConsistency, Consistency}
-import athena.data.Consistency._
+import Consistency._
 import akka.actor.ActorRefFactory
-import athena.data.SerialConsistency._
-import athena.data.SerialConsistency.SerialConsistency
+import SerialConsistency._
+import SerialConsistency.SerialConsistency
 
 /**
  * Models connector settings for connections to Cassandra hosts. Contains options dealing with options such as

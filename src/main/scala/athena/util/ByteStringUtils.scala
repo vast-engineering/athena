@@ -5,10 +5,11 @@ import java.util.UUID
 import java.nio.ByteOrder
 import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
-import athena.data.Consistency
+import athena.{Consistency, Athena}
 import Consistency.Consistency
-import athena.Athena
+import athena.{Consistency, Athena}
 import Consistency.Consistency
+import java.net.{InetAddress, InetSocketAddress}
 
 /**
  * Utilities to help encode and decode the grammar described in the spec
@@ -94,6 +95,27 @@ private[athena] object ByteStringUtils {
     new String(bytes, "UTF-8")
   }
 
+  def writeStringList(l: Seq[String])(implicit byteOrder: ByteOrder): ByteString = {
+    val builder = ByteString.newBuilder
+    var count = 0
+    val it = l.iterator
+    while(it.hasNext) {
+      val bytes = it.next().getBytes("UTF-8")
+      builder.putShort(bytes.length).putBytes(bytes)
+      count = count + 1
+    }
+    newBuilder(2).putShort(count).append(builder.result()).result()
+  }
+  def readStringList(it: ByteIterator)(implicit byteOrder: ByteOrder): Seq[String] = {
+    val builder = Seq.newBuilder[String]
+    var numStrings: Int = it.getShort
+    while(numStrings > 0) {
+      builder += readString(it)
+      numStrings = numStrings - 1
+    }
+    builder.result()
+  }
+
   def readConsistency(it: ByteIterator)(implicit byteOrder: ByteOrder): Consistency = {
     val consistencyCode = it.getShort
     Consistency.fromId(consistencyCode).getOrElse(throw new Athena.InternalException(s"Unknown consistency value $consistencyCode"))
@@ -105,6 +127,12 @@ private[athena] object ByteStringUtils {
 
   def bytes(v: ByteString)(implicit byteOrder: ByteOrder): ByteString = {
     newBuilder(4 + v.length).putInt(v.length).append(v).result()
+  }
+  def readBytes(it: ByteIterator)(implicit byteOrder: ByteOrder): ByteString = {
+    val length = it.getInt
+    val bs = it.clone().take(length).toByteString
+    it.drop(length)
+    bs
   }
 
   def shortBytes(v: Array[Byte])(implicit byteOrder: ByteOrder): ByteString = {
@@ -140,6 +168,14 @@ private[athena] object ByteStringUtils {
     val bb = ByteString.newBuilder
     bb.sizeHint(size)
     bb
+  }
+
+  def readInetAddress(it: ByteIterator)(implicit byteOrder: ByteOrder): InetSocketAddress = {
+    val size = it.getByte
+    val addrBytes = new Array[Byte](size)
+    it.getBytes(addrBytes)
+    val port = it.getInt
+    new InetSocketAddress(InetAddress.getByAddress(addrBytes), port)
   }
 
 }

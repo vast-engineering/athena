@@ -2,8 +2,9 @@ package athena.connector
 
 import akka.util.ByteString
 import athena.data._
-import athena.data.Consistency._
-import athena.data.SerialConsistency._
+import athena.{ClusterEventName, SerialConsistency, Consistency}
+import Consistency._
+import SerialConsistency._
 
 /**
  * A base trait for all Cassandra requests - these map 1:1 to opcodes defined here -
@@ -20,7 +21,7 @@ private[connector] object CassandraRequests {
 
   case object Startup extends CassandraRequest
 
-  trait FetchRequest extends CassandraRequest {
+  sealed trait FetchRequest extends CassandraRequest {
     def withPagingState(pagingState: Option[ByteString]): FetchRequest
   }
 
@@ -29,6 +30,8 @@ private[connector] object CassandraRequests {
                           pagingState: Option[ByteString] = None) extends FetchRequest {
     def withPagingState(pagingState: Option[ByteString]) = copy(pagingState = pagingState)
   }
+
+  case class Register(eventNames: Seq[ClusterEventName]) extends CassandraRequest
 
 }
 

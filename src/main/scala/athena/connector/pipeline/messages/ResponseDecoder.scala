@@ -9,6 +9,7 @@ import java.net.InetSocketAddress
 import athena.connector.CassandraResponses._
 import Errors._
 import athena.connector.CassandraError
+import athena.Athena.InternalException
 
 private[pipeline] object ResponseDecoder {
 
@@ -82,7 +83,27 @@ private[pipeline] object ResponseDecoder {
       case SetKeyspaceCode => ResultDecoder.decodeSetKeyspace(it)
       case x => throw new NotImplementedError(s"Decoder for response code $x not implemented.")
     }
-
   }
+
+  def decodeEvent(bs: ByteString)(implicit byteOrder: ByteOrder): ClusterEvent = {
+    val it = bs.iterator
+    val eventName = ByteStringUtils.readString(it)
+    val subEventName = ByteStringUtils.readString(it)
+    eventName match {
+      case "TOPOLOGY_CHANGE" =>
+        val nodeAddr = ByteStringUtils.readInetAddress(it)
+        TopologyEvent(subEventName, nodeAddr)
+      case "STATUS_CHANGE" =>
+        val nodeAddr = ByteStringUtils.readInetAddress(it)
+        HostStatusEvent(subEventName, nodeAddr)
+      case "SCHEMA_CHANGE" =>
+        val keyspace = ByteStringUtils.readString(it)
+        val table = ByteStringUtils.readString(it)
+        SchemaEvent(subEventName, keyspace, table)
+      case x =>
+        throw new InternalException(s"Unknown event $x")
+    }
+  }
+
 }
 

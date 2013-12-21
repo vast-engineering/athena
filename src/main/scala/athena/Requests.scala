@@ -1,24 +1,19 @@
 package athena
 
-import athena.data.Consistency.Consistency
-import athena.data.SerialConsistency.SerialConsistency
-import athena.data.{SerialConsistency, Consistency, DataType, CValue}
+import athena.data.CValue
 import athena.util.MD5Digest
 import akka.util.ByteString
-import athena.data.Consistency.Consistency
-import athena.data.SerialConsistency.SerialConsistency
-
-/**
- * Used to describe the metadata around a single input parameter to a statement or a column in the output of a query
- */
-case class ColumnDef(keyspace: String, table: String, name: String, dataType: DataType)
+import Consistency.Consistency
+import SerialConsistency.SerialConsistency
+import athena.data.ColumnDef
 
 /**
  * A command that will ultimately result in a network request
  */
-sealed trait AthenaRequest
 
 object Requests {
+
+  sealed trait AthenaRequest
 
   /**
    * A Command that instructs a connection, node or cluster to execute a query
@@ -26,6 +21,8 @@ object Requests {
   sealed trait Query extends AthenaRequest
 
   sealed trait Statement extends Query {
+    def keyspace: Option[String]
+    def routingKey: Option[ByteString]
     def consistency: Option[Consistency]
     def serialConsistency: Option[SerialConsistency]
     def fetchSize: Option[Int]
@@ -42,6 +39,8 @@ object Requests {
    */
   case class SimpleStatement(query: String,
                              values: Seq[CValue] = Seq(),
+                             keyspace: Option[String] = None,
+                             routingKey: Option[ByteString] = None,
                              consistency: Option[Consistency] = None,
                              serialConsistency: Option[SerialConsistency] = None,
                              fetchSize: Option[Int] = None) extends Statement
@@ -55,6 +54,8 @@ object Requests {
 
   //used internally - should only be able to be constructed by binding a PreparedStatementDef to a set of parameters
   private[athena] case class BoundStatement(statementDef: PreparedStatementDef, parameters: Seq[CValue],
+                                            keyspace: Option[String] = None,
+                                            routingKey: Option[ByteString] = None,
                                             consistency: Option[Consistency], serialConsistency: Option[SerialConsistency], fetchSize: Option[Int]) extends Statement
 
   //TODO add batch statements

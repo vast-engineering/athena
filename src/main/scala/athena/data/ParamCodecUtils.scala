@@ -24,24 +24,12 @@ private[data] object ParamCodecUtils extends Logging {
   }
 
   /**
-   * Parse a collection of bytes from the given ByteString, returning the remainder. It's assumed that the
-   * start of the ByteString contains a short describing the length of the array. The given number of bytes
-   * are parsed from teh string, and the remainder are returned.
-   */
-  def getShortBytes(bs: ByteString)(implicit byteOrder: ByteOrder): (ByteString, ByteString) = {
-    val it = bs.iterator
-    val size = it.getShort
-    it.toByteString.splitAt(size)
-  }
-
-  /**
    * Packs a Iterable of ByteString instances into the following structure -
    *
    *   [numElements] [size_n][bytes_n] where numElements and size are shorts, and the (size, byte) pair is repeated numElements times
    *
    */
   def packParamByteStrings(strings: Iterable[ByteString], numElements: Int)(implicit byteOrder: ByteOrder): ByteString = {
-
     val builder = newBuilder(2).putShort(numElements)
     val it = strings.iterator
     while(it.hasNext) {
@@ -64,16 +52,15 @@ private[data] object ParamCodecUtils extends Logging {
     val it = bs.iterator
     val count = it.getShort
 
-    @tailrec def helper(count: Int, input: ByteString, acc: List[ByteString]): List[ByteString] = {
-      if(count == 0) {
-        acc.reverse
-      } else {
-        val (data, remainder) = getShortBytes(input)
-        helper(count - 1, remainder, data :: acc)
-      }
+    val builder = Seq.newBuilder[ByteString]
+    var idx = 0
+    while(idx < count) {
+      val size = it.getShort
+      builder += it.clone().take(size).toByteString
+      it.drop(size)
+      idx = idx + 1
     }
-
-    helper(count, bs, Nil)
+    builder.result()
   }
 
   /**
@@ -87,17 +74,19 @@ private[data] object ParamCodecUtils extends Logging {
     val it = bs.iterator
     val count = it.getShort
 
-    @tailrec def helper(count: Int, input: ByteString, acc: List[(ByteString, ByteString)]): List[(ByteString, ByteString)] = {
-      if(count == 0) {
-        acc.reverse
-      } else {
-        val (keyData, keyRemainder) = getShortBytes(input)
-        val (valueData, valueRemainder) = getShortBytes(keyRemainder)
-        helper(count - 1, valueRemainder, (keyData, valueData) :: acc)
-      }
+    val builder = Seq.newBuilder[(ByteString, ByteString)]
+    var idx = 0
+    while(idx < count) {
+      val keySize = it.getShort
+      val keyBytes = it.clone().take(keySize).toByteString
+      it.drop(keySize)
+      val dataSize = it.getShort
+      val dataBytes = it.clone().take(dataSize).toByteString
+      it.drop(dataSize)
+      builder += (keyBytes -> dataBytes)
+      idx = idx + 1
     }
-
-    helper(count, it.toByteString, Nil)
+    builder.result()
   }
 
 

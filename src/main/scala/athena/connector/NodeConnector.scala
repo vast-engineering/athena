@@ -1,7 +1,12 @@
 package athena.connector
 
 import akka.actor._
-import athena.{Athena, AthenaRequest}
+import athena.{NodeConnectorSettings, Responses, Athena}
+import athena.Requests.AthenaRequest
+import scala.concurrent.duration.Duration
+import athena.Responses.AthenaResponse
+import java.net.{InetAddress, InetSocketAddress}
+import athena.Athena.NodeConnectorSetup
 
 /**
  * Manages a pool of connections to a single Cassandra node. This Actor takes incoming requests and dispatches
@@ -9,209 +14,319 @@ import athena.{Athena, AthenaRequest}
  *
  * @author David Pratt (dpratt@vast.com)
  */
-private[athena] class NodeConnector(setup: Athena.NodeConnectorSetup) extends Actor with ActorLogging {
+private[athena] class NodeConnector(remoteAddress: InetSocketAddress,
+                                    keyspace: Option[String],
+                                    settings: NodeConnectorSettings) extends Actor with ActorLogging {
+
+  //
+  // TODO - reap connections below the usage threshold
+  //
 
   import NodeConnector._
 
-  private[this] var slotStates = Map.empty[ActorRef, SlotState] // state per child
-  private[this] var idleConnections = List.empty[ActorRef] // FILO queue of idle connections, managed by updateSlotState
-  private[this] var unconnectedConnections = List.empty[ActorRef] // FILO queue of unconnected, managed by updateSlotState
+  private[this] var connecting = Set.empty[ActorRef]
+  private[this] var activeConnections = Map.empty[ActorRef, Int]
+  private[this] var idleConnections = Set.empty[ActorRef]
   private[this] val counter = Iterator from 0
 
   // we cannot sensibly recover from crashes
   override def supervisorStrategy = SupervisorStrategy.stoppingStrategy
 
-  private[this] val settings = setup.settings.get
-
   override def preStart() {
     for(i <- 0 until settings.poolSettings.coreConnections) {
-      newConnectionChild()
+      spawnNewConnection()
     }
   }
 
-  def receive: Receive = {
-    case req: AthenaRequest =>
-      val connectionOpt = pickConnection()
-      if(connectionOpt.isEmpty) {
-        sender ! NodeUnavailable(req)
-      } else {
-        dispatch(req, connectionOpt.get)
-      }
+  def receive: Actor.Receive = starting()
 
-    case RequestCompleted ⇒
-      log.debug("Request completed.")
-      updateSlotState(sender, slotStates(sender).decrementRequestCount)
+  context.setReceiveTimeout(settings.connectionSettings.socketSettings.connectTimeout)
 
-    case Disconnected(rescheduledRequestCount) ⇒
-      val newState =
-        slotStates(sender) match {
-          case SlotState.Connected(requestCount) if requestCount == rescheduledRequestCount ⇒
-            SlotState.Unconnected // "normal" case when a connection was closed
-
-          case SlotState.Idle ⇒ SlotState.Unconnected
-
-          case SlotState.Connected(requestCount) if requestCount > rescheduledRequestCount ⇒
-            //this means that the node disconnected but we've sent it requests in the interim
-            SlotState.Connected(requestCount - rescheduledRequestCount)
-
-          case SlotState.Unconnected ⇒ throw new IllegalStateException("Unexpected slot state: Unconnected")
+  private def starting(openRequests: Set[(AthenaRequest, ActorRef)] = Set.empty): Receive = {
+    case Athena.Connected(remote, local) =>
+      addConnection(sender)
+      if(activeConnections.size == settings.poolSettings.coreConnections) {
+        openRequests.foreach {
+          case (req, respondTo) => dispatch(req, respondTo)
         }
-      updateSlotState(sender, newState)
+        context.setReceiveTimeout(Duration.Inf)
+        context.parent ! NodeConnected(remoteAddress.getAddress)
+        context.become(running)
+      }
 
-    case Terminated(child) ⇒
-      removeSlot(child)
+    case Athena.CommandFailed(Athena.Connect(_, _, _, _)) =>
+      //couldn't connect to the host - this is a fatal signal for us - we need to shut down
+      removeConnection(sender)
+      close(None, Set())
+
+    case Terminated(child) if childConnections.contains(child) ⇒
+      //this means a connection died, and thus we need to die as well
+      removeConnection(sender)
+      close(None, Set())
 
     case cmd: Athena.CloseCommand =>
-      val stillConnected = slotStates.foldLeft(Set.empty[ActorRef]) {
-        case (acc, (_, SlotState.Unconnected)) =>
-          acc
-        case (acc, (connection, _)) =>
-          connection ! Athena.Close
-          acc + connection
-      }
-      if (stillConnected.isEmpty) {
-        sender ! Athena.Closed
-        context.stop(self)
-      } else {
-        context.setReceiveTimeout(settings.closeTimeout)
-        context.become(closing(cmd, stillConnected, Set(sender)))
-      }
+      close(Some(cmd), Set(sender))
 
+    case req: AthenaRequest =>
+      //save the request for when we're done creating the core connections.
+      context.become(starting(openRequests + (req -> sender)))
+
+    case ReceiveTimeout =>
+      log.error("Timed out waiting for core connections.")
+      close(None, Set())
 
   }
 
-  def closing(command: Athena.CloseCommand, connected: Set[ActorRef], commanders: Set[ActorRef]): Receive = {
+  private def running: Receive = {
+
+    case Athena.Connected(remote, local) =>
+      addConnection(sender)
+
+    case Athena.CommandFailed(Athena.Connect(remoteHost, _, _, _)) =>
+      //couldn't connect to the host - this is a fatal signal for us - we need to shut down
+      removeConnection(sender)
+      close(None, Set())
+
+    case Terminated(child) if childConnections.contains(child) ⇒
+      //this means a connection died, and thus we need to die as well
+      //actor is already dead, don't kill it
+      removeConnection(sender)
+      close(None, Set())
+
+    case req: AthenaRequest =>
+      dispatch(req, sender)
+
+    case KillConnection =>
+      close(None, Set())
+
+    case RequestCompleted(connection) ⇒
+      log.debug("Request completed.")
+      decrementConnection(connection)
+
     case cmd: Athena.CloseCommand =>
-      context.become(closing(cmd, connected, commanders + sender))
+      close(Some(cmd), Set(sender))
 
-    case Terminated(child) ⇒
-      val stillConnected = connected - child
-      if (stillConnected.isEmpty) {
-        commanders foreach (_ ! command.event)
-        context.stop(self)
-      } else context.become(closing(command, stillConnected, commanders))
+  }
 
-    case ReceiveTimeout ⇒
-      log.warning("Initiating forced shutdown due to close timeout expiring.")
+  private def childConnections = connecting ++ activeConnections.keySet
+
+  private def close(command: Option[Athena.CloseCommand], commanders: Set[ActorRef]) = {
+
+    log.debug("Closing node connector with active connections - {}", activeConnections)
+
+    val closeCommand = command.getOrElse(Athena.Close)
+
+    def signalClosed() {
+      commanders.foreach(_ ! closeCommand.event)
       context.stop(self)
+    }
 
-    case _: Disconnected | RequestCompleted  ⇒ // ignore
+    def closing(command: Athena.CloseCommand, connected: Set[ActorRef], commanders: Set[ActorRef]): Receive = {
+      log.debug("Moving to closing state with {} live connections - {}", connected.size, connected)
+
+      context.setReceiveTimeout(settings.poolSettings.connectionTimeout)
+
+      {
+        case req: AthenaRequest =>
+          log.warning("Rejecting request because connector is shutting down.")
+          sender ! Responses.RequestFailed(req)
+
+        case cmd: Athena.CloseCommand =>
+          log.debug("Got close command {} from {}", cmd, sender)
+          context.become(closing(cmd, connected, commanders + sender))
+
+        case Athena.Connected(_, _) =>
+          sender ! Athena.Close
+
+        case Athena.CommandFailed(Athena.Connect(remoteHost, _, _, _)) =>
+        //ignore
+
+        case Terminated(child) ⇒
+          val stillConnected = connected - child
+          if (stillConnected.isEmpty) {
+            signalClosed()
+          } else context.become(closing(command, stillConnected, commanders))
+
+        case ReceiveTimeout ⇒
+          log.warning("Initiating forced shutdown due to close timeout expiring.")
+          signalClosed()
+
+        case _: RequestCompleted  ⇒ // ignore
+      }
+    }
+
+    val open = childConnections
+
+    if(open.isEmpty) {
+      log.debug("Stopping immediately.")
+      signalClosed()
+    } else {
+      log.debug("Killing all active connections.")
+      open.foreach(_ ! closeCommand)
+      context.become(closing(closeCommand, open, commanders))
+    }
   }
 
-
-  def firstIdleConnection: Option[ActorRef] = idleConnections.headOption
-  def firstUnconnectedConnection: Option[ActorRef] = unconnectedConnections.headOption orElse {
-    if (slotStates.size < settings.poolSettings.maxConnections) Some(newConnectionChild()) else None
+  private def incrementConnection(conn: ActorRef) {
+    val countOpt = activeConnections.get(conn)
+    if(countOpt.isEmpty) {
+      log.warning("Could not find slot for connection. Ignoring.")
+    } else {
+      val count = countOpt.get
+      activeConnections = activeConnections.updated(conn, count + 1)
+      idleConnections = idleConnections - conn
+    }
   }
 
-  def newConnectionChild(): ActorRef = {
-    val child = context.watch {
+  private def decrementConnection(conn: ActorRef) {
+    val countOpt = activeConnections.get(conn)
+    if(countOpt.isEmpty) {
+      log.warning("Could not find slot for connection. Ignoring.")
+    } else {
+      val newCount = countOpt.get - 1
+      if(newCount >= 0) {
+        activeConnections = activeConnections.updated(conn, newCount)
+      } else {
+        log.error("Attempt to set usage count for connection to negative number.")
+      }
+    }
+  }
+
+  private def addConnection(conn: ActorRef) {
+    log.debug("New connection opened - {}", conn)
+    connecting = connecting - conn
+    activeConnections = activeConnections.updated(conn, 0)
+    idleConnections = idleConnections + conn
+  }
+
+  private def removeConnection(conn: ActorRef) {
+    log.debug("Removing connection - {}", conn)
+    connecting = connecting - conn
+    activeConnections = activeConnections - conn
+    idleConnections = idleConnections - conn
+  }
+
+  private def firstIdleConnection: Option[ActorRef] = {
+    val opt = idleConnections.headOption
+    if(log.isDebugEnabled) {
+      if(opt.isDefined) {
+        log.debug("Using idle connection.")
+      } else {
+        log.debug("No idle connections.")
+      }
+    }
+    opt
+  }
+
+  private def spawnNewConnection() {
+    log.debug("Spawning connection.")
+    val connect = Athena.Connect(remoteAddress, keyspace, Some(settings.connectionSettings), None)
+    val actor = context.watch {
       context.actorOf(
-        props = Props[NodeConnectionHolder](new NodeConnectionHolder(setup.remoteAddress, setup.keyspace, settings.connectionSettings)),
-        name = counter.next().toString)
+        props = Props(new ConnectionActor(self, connect, settings.connectionSettings)),
+        name = "connection-" + counter.next().toString)
     }
-    updateSlotState(child, SlotState.Idle)
-    child
+    connecting = connecting + actor
   }
 
-  def pickConnection(): Option[ActorRef] = firstIdleConnection orElse firstUnconnectedConnection orElse {
-    def available: ((ActorRef, SlotState)) ⇒ Boolean = {
-      case (child, x: SlotState.Connected) ⇒ x.openRequestCount < settings.poolSettings.maxConcurrentRequests
-      case (child, SlotState.Unconnected) ⇒ true
-      case (child, SlotState.Idle) ⇒ true
+  private def pickConnection(): Option[ActorRef] = {
+    val connectionOpt = firstIdleConnection orElse {
+      //find the least busy active connection and it's current request count
+      val leastBusy = activeConnections.reduceLeftOption[(ActorRef, Int)] {
+        case (acc, tuple) => if(tuple._2 < acc._2) tuple else acc
+      }
+      //if the least busy connection has more than the max number of simultaneous requests,
+      //and we have fewer than the max number of connections, spawn another one
+      leastBusy.foreach {
+        case (connection, activeCount) =>
+          if(activeCount > settings.poolSettings.maxConcurrentRequests && activeConnections.size < settings.poolSettings.maxConnections) {
+            spawnNewConnection()
+          }
+      }
+      leastBusy.map(_._1)
+
     }
-
-    slotStates.toSeq.filter(available).sortBy(_._2.openRequestCount).headOption.map(_._1)
+    connectionOpt.foreach(incrementConnection(_))
+    connectionOpt
   }
 
-  def dispatch(req: AthenaRequest, connection: ActorRef): Unit = {
-    connection.forward(req)
-    val currentState = slotStates(connection)
-    updateSlotState(connection, currentState.incrementRequestCount)
-  }
-
-  /** update slot state and manage idleConnections and unconnectedConnections queues */
-  def updateSlotState(child: ActorRef, newState: SlotState): Unit = {
-    log.debug("Slot states before update- {}", slotStates)
-
-    val oldState = slotStates.get(child)
-    slotStates = slotStates.updated(child, newState)
-
-    //a state transition has side effects for us
-    (oldState, newState) match {
-
-      case (None, SlotState.Idle) =>
-        //this indicates a new connection
-        idleConnections ::= child
-
-      case (None, _) ⇒ throw new IllegalStateException // may only change to Idle
-
-      case (Some(SlotState.Unconnected), SlotState.Unconnected) => throw new IllegalStateException
-
-      case (Some(s), SlotState.Unconnected) ⇒
-        unconnectedConnections ::= child
-        if (s == SlotState.Idle)
-          idleConnections = idleConnections.filterNot(_ == child)
-
-      case (Some(SlotState.Connected(_)), SlotState.Idle) ⇒ idleConnections ::= child
-
-      case (Some(SlotState.Unconnected), SlotState.Connected(_)) ⇒
-        require(unconnectedConnections.head == child)
-        unconnectedConnections = unconnectedConnections.tail
-
-      case (Some(SlotState.Idle), SlotState.Connected(_)) ⇒
-        require(idleConnections.head == child)
-        idleConnections = idleConnections.tail
-
-      case (Some(SlotState.Connected(_)), SlotState.Connected(_)) ⇒ // ignore
-      case (Some(SlotState.Idle), SlotState.Idle) ⇒ throw new IllegalStateException
-      case (Some(SlotState.Unconnected), SlotState.Idle) ⇒ throw new IllegalStateException // not possible
+  private def dispatch(req: AthenaRequest, respondTo: ActorRef): Unit = {
+    val connectionOpt = pickConnection()
+    if(connectionOpt.isEmpty) {
+      sender ! NodeUnavailable(req)
+    } else {
+      context.actorOf(
+        props = RequestActor.props(req, connectionOpt.get, respondTo, settings.connectionSettings.requestTimeout),
+        name = "request-actor-" + counter.next()
+      )
     }
-
-    log.debug("Slot states after update- {}", slotStates)
   }
-
-  def removeSlot(child: ActorRef): Unit = {
-    slotStates -= child
-    unconnectedConnections = unconnectedConnections.filterNot(_ == child)
-    idleConnections = idleConnections.filterNot(_ == child)
-  }
-
 
 }
 
-private[connector] object NodeConnector {
+private[athena] object NodeConnector {
+
+  def props(remoteAddress: InetSocketAddress,
+            keyspace: Option[String],
+            settings: NodeConnectorSettings): Props = {
+    Props(new NodeConnector(remoteAddress, keyspace, settings))
+  }
+
+  def props(setup: NodeConnectorSetup): Props = props(setup.remoteAddress, setup.keyspace, setup.settings.get)
+
+  //sent when the node pool finishes initialization
+  case class NodeConnected(addr: InetAddress)
 
   //sent by this Actor to the original sender when all connections to this host are saturated
   case class NodeUnavailable(request: AthenaRequest)
 
-  case class NodeConnected()
-  case class Disconnected(rescheduledRequestCount: Int)
+  case class RequestCompleted(connection: ActorRef)
 
-  case class RequestCompleted(request: AthenaRequest)
+  case object KillConnection
 
-  sealed trait SlotState {
-    def incrementRequestCount: SlotState
-    def decrementRequestCount: SlotState
-    def openRequestCount: Int
-  }
-  object SlotState {
-    sealed private[SlotState] abstract class WithoutRequests extends SlotState {
-      def incrementRequestCount = Connected(1)
-      def decrementRequestCount = throw new IllegalStateException
-      def openRequestCount = 0
+  private class RequestActor(req: AthenaRequest, connection: ActorRef, respondTo: ActorRef, requestTimeout: Duration) extends Actor with ActorLogging {
+
+    override def preStart(): Unit = {
+      context.watch(connection)
+      context.setReceiveTimeout(requestTimeout)
+      connection ! req
     }
-    case object Unconnected extends WithoutRequests
-    case object Idle extends WithoutRequests
 
-    case class Connected(openRequestCount: Int) extends SlotState {
-      require(openRequestCount > 0)
-      def incrementRequestCount= Connected(openRequestCount + 1)
-      def decrementRequestCount = {
-        val newCount = openRequestCount - 1
-        if (newCount == 0) Idle
-        else Connected(newCount)
-      }
+    def receive: Actor.Receive = {
+      case resp: AthenaResponse =>
+        log.debug("Delivering {} for {}", resp, req)
+        respondTo ! resp
+
+        //notify the parent if the request failed - they should close the connection
+        if(resp.isFailure) {
+          notifyParent()
+        }
+        context.stop(self)
+
+      case Terminated(`connection`) ⇒
+        respondTo ! Responses.RequestFailed(req)
+        context.stop(self)
+
+      case ReceiveTimeout =>
+        respondTo ! Responses.Timedout(req)
+        notifyParent()
+        context.stop(self)
+    }
+
+    override def postStop(): Unit = {
+      context.parent ! RequestCompleted(connection)
+    }
+
+    private def notifyParent() {
+      log.debug("Sending {} failed, notifying connection holder.", req)
+      context.parent ! KillConnection
+    }
+
+  }
+
+  private object RequestActor {
+    def props(req: AthenaRequest, connection: ActorRef, respondTo: ActorRef, requestTimeout: Duration): Props = {
+      Props[RequestActor](new RequestActor(req, connection, respondTo, requestTimeout))
     }
   }
 }

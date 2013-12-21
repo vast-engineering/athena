@@ -7,12 +7,9 @@
         </encoder>
     </appender>
 
-    <logger name="com.vast.common.graphite" level="INFO"/>
-    <logger name="org.springframework.jdbc.core.JdbcTemplate" level="DEBUG"/>
-    <logger name="com.vast.analytics.models.similarity.PriceDriversMatrixNumericPenalty" level="INFO"/>
-    <logger name="com.vast" level="DEBUG" />
+    <logger name="athena" level="DEBUG"/>
 
-    <root level="DEBUG">
+    <root level="WARN">
         <appender-ref ref="STDOUT"/>
     </root>
 </configuration>

@@ -2,7 +2,7 @@ package athena
 
 import java.net.InetSocketAddress
 import athena.Athena._
-import athena.data.Consistency._
+import Consistency._
 import athena.util.MD5Digest
 import athena.connector.CassandraError
 

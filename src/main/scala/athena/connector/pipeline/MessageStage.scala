@@ -4,7 +4,7 @@ import akka.io._
 import athena._
 import athena.connector.pipeline.messages._
 import akka.util.ByteString
-import athena.connector.pipeline.messages.ResponseOpcodes.{ERROR, RESULT, READY}
+import athena.connector.pipeline.messages.ResponseOpcodes.{EVENT, ERROR, RESULT, READY}
 import athena.connector.CassandraRequests.CassandraRequest
 import athena.connector.CassandraResponses.{Ready, CassandraResponse}
 import athena.connector.HasConnectionInfo
@@ -38,11 +38,10 @@ class MessageStage extends PipelineStage[HasConnectionInfo, RequestEnvelope, Fra
         case READY => Ready
         case RESULT => ResponseDecoder.decodeResult(body)
         case ERROR => ResponseDecoder.decodeError(body, ctx.host)
-        case x => throw new UnsupportedOperationException(s"Response parser for $opcode is not implemented.")
-        //      case ERROR =>
+        case EVENT => ResponseDecoder.decodeEvent(body)
+        case x => throw new UnsupportedOperationException(s"Response parser for $x is not implemented.")
         //      case AUTHENTICATE =>
         //      case SUPPORTED =>
-        //      case EVENT =>
         //      case AUTH_CHALLENGE =>
         //      case AUTH_SUCCESS =>
       }

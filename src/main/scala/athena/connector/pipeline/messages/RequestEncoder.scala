@@ -7,6 +7,7 @@ import athena.connector._
 import athena.data._
 import athena.connector.CassandraRequests._
 import athena.util.ByteStringUtils
+import athena.Consistency
 
 private[connector] object RequestEncoder {
 
@@ -14,7 +15,7 @@ private[connector] object RequestEncoder {
     r match {
       case Startup => EncodedStartup
       case q: QueryRequest => encodeQuery(q)
-      case fr: FetchRequest => throw new NotImplementedError("Fetch request parsing not implemented.")
+      case Register(eventNames) => (RequestOpcodes.REGISTER, ByteStringUtils.writeStringList(eventNames.map(_.toString)))
     }
   }
 
@@ -33,7 +34,7 @@ private[connector] object RequestEncoder {
       suffixBuilder.putShort(request.params.length)
       request.params.foreach {
         param =>
-          suffixBuilder.append(ByteStringUtils.bytes(CValue.toByteString(param)))
+          suffixBuilder.append(ByteStringUtils.bytes(param.as[ByteString]))
       }
     }
 
@@ -60,4 +61,5 @@ private[connector] object RequestEncoder {
 
     (RequestOpcodes.QUERY, body)
   }
+
 }
