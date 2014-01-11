@@ -2,7 +2,7 @@ package athena.data
 
 import scala.annotation.implicitNotFound
 import org.joda.time.DateTime
-import java.util.Date
+import java.util.{UUID, Date}
 
 /**
  * Cassandra serializer: write an implicit to define a marshaller for any type.
@@ -29,26 +29,47 @@ object Writes extends DefaultWrites {
 
 trait DefaultWrites {
 
-  object StringWrites extends Writes[String] {
+  implicit object StringWrites extends Writes[String] {
     def writes(value: String): CValue = CVarChar(value)
   }
 
-  object IntWrites extends Writes[Int] {
+  implicit object IntWrites extends Writes[Int] {
     def writes(value: Int): CValue = CInt(value)
   }
 
-  object DoubleWrites extends Writes[Double] {
+  implicit object DoubleWrites extends Writes[Double] {
     def writes(value: Double): CValue = CDouble(value)
   }
 
-  object DateTimeWrites extends Writes[DateTime] {
+  implicit object DateTimeWrites extends Writes[DateTime] {
     def writes(value: DateTime): CValue = CTimestamp(value)
   }
 
-  object DateWrites extends Writes[Date] {
+  implicit object DateWrites extends Writes[Date] {
     def writes(value: Date): CValue = CTimestamp(new DateTime(value))
   }
 
+  implicit object UUIDWrites extends Writes[UUID] {
+    def writes(value: UUID): CValue = CUUID(value)
+  }
+
+  implicit def mapWrites[A, B](implicit a: Writes[A], b: Writes[B]): Writes[Map[A, B]] = new Writes[Map[A, B]] {
+    def writes(value: Map[A, B]): CValue = CMap(value.map {
+      case (key, value) => (CValue(key), CValue(value))
+    })
+  }
+
+  implicit def listWrites[A](implicit a: Writes[A]): Writes[List[A]] = new Writes[List[A]] {
+    def writes(value: List[A]): CValue = CList(value.map(CValue(_)))
+  }
+
+  implicit def setWrites[A](implicit a: Writes[A]): Writes[Set[A]] = new Writes[Set[A]] {
+    def writes(value: Set[A]): CValue = CSet(value.map(CValue(_)))
+  }
+
+  implicit def optionWrites[A](implicit a: Writes[A]): Writes[Option[A]] = new Writes[Option[A]] {
+    def writes(value: Option[A]): CValue = value.map(CValue(_)).getOrElse(CNull)
+  }
 
 }
 

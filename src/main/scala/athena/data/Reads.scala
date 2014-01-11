@@ -90,6 +90,14 @@ trait DefaultReads {
     }
   }
 
+  def reads[T](r: PartialFunction[CValue, CvResult[T]])(implicit t: TypeTag[T]): Reads[T] = {
+    new Reads[T] {
+      def reads(cvalue: CValue): CvResult[T] = {
+        if(r.isDefinedAt(cvalue)) r(cvalue) else CvError("Cannot convert value to to type ${t.tpe.toString}.")
+      }
+    }
+  }
+
   implicit val StringReads: Reads[String] = nonNull {
     case CVarChar(value) => CvSuccess(value)
     case CASCIIString(value) => CvSuccess(value)
@@ -152,7 +160,8 @@ trait DefaultReads {
     case CInetAddress(address) => CvSuccess(address)
   }
 
-  implicit def mapReads[A, B](implicit keyReads: Reads[A], valueReads: Reads[B], a: TypeTag[A], b: TypeTag[B]): Reads[Map[A, B]] = nonNull {
+  implicit def mapReads[A, B](implicit keyReads: Reads[A], valueReads: Reads[B], a: TypeTag[A], b: TypeTag[B]): Reads[Map[A, B]] = reads {
+    case CNull => CvSuccess(Map.empty)
     case CMap(values) =>
       val converted: Iterable[CvResult[(A, B)]] = values.map {
         case (key, value) => keyReads.reads(key).zip(valueReads.reads(value))
@@ -160,12 +169,14 @@ trait DefaultReads {
       CvResult.sequence(converted).map(_.toMap)
   }
 
-  implicit def seqReads[A](implicit valueReads: Reads[A], a: TypeTag[A]): Reads[Seq[A]] = nonNull {
+  implicit def seqReads[A](implicit valueReads: Reads[A], a: TypeTag[A]): Reads[Seq[A]] = reads {
+    case CNull => CvSuccess(Seq.empty)
     case CList(values) =>
       CvResult.sequence(values.map(valueReads.reads(_)))
   }
 
-  implicit def setReads[A](implicit valueReads: Reads[A], a: TypeTag[A]): Reads[Set[A]] = nonNull {
+  implicit def setReads[A](implicit valueReads: Reads[A], a: TypeTag[A]): Reads[Set[A]] = reads {
+    case CNull => CvSuccess(Set.empty)
     case CList(values) => CvResult.sequence(values.map(valueReads.reads(_)).toSet)
     case CSet(values) => CvResult.sequence(values.map(valueReads.reads(_)))
   }
@@ -178,6 +189,7 @@ trait DefaultReads {
      */
     def reads(cvalue: CValue): CvResult[ByteString] = cvalue match {
       case CASCIIString(value) => CvSuccess(ByteString(value, "ASCII"))
+      case CVarChar(value) => CvSuccess(ByteString(value, "UTF-8"))
       case CBigInt(value) => CvSuccess(newBuilder(8).putLong(value).result())
       case CBlob(bytes) => CvSuccess(bytes)
       case CBoolean(value) => CvSuccess(if(value) CBoolean.TRUE_BUFFER else CBoolean.FALSE_BUFFER)
@@ -196,7 +208,6 @@ trait DefaultReads {
           .putLong(value.getLeastSignificantBits)
           .result()
         CvSuccess(uuid)
-      case CVarChar(value) => CvSuccess(ByteString(value, "UTF-8"))
       case CVarInt(value) => CvSuccess(ByteString(value.toByteArray))
       case CTimeUUID(value) =>
         val uuid = newBuilder(16)
@@ -207,11 +218,8 @@ trait DefaultReads {
       case CInetAddress(value) =>  CvSuccess(ByteString(value.getAddress))
       case CMap(values) =>
         val length = values.size
-        val strings = values.map {
-          case (key, value) =>
-            CValue.fromValue[ByteString](key).combine(CValue.fromValue[ByteString](value)) { (convertedKey, convertedValue) =>
-                convertedKey ++ convertedValue
-            }
+        val strings = values.foldLeft(IndexedSeq.empty[CvResult[ByteString]]) {
+          case (acc, (key, value)) => acc :+ CValue.fromValue[ByteString](key) :+ CValue.fromValue[ByteString](value)
         }
         CvResult.sequence(strings).map { byteStrings =>
           ParamCodecUtils.packParamByteStrings(byteStrings, length)

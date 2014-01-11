@@ -14,6 +14,8 @@ import java.net.{InetSocketAddress, InetAddress}
 import akka.util.Timeout
 import java.util.concurrent.TimeUnit
 import scala.util.control.NonFatal
+import spray.util.LoggingContext
+import akka.event.LoggingAdapter
 
 private[athena] class ClusterConnector(initialHosts: Set[InetAddress],
                                        port: Int,
@@ -88,7 +90,7 @@ private[athena] class ClusterConnector(initialHosts: Set[InetAddress],
 
     case req: AthenaRequest =>
       context.actorOf(
-        props = RequestActor.props(req, sender, routingPlan.generatePlan(req, liveHosts), defaultRequestTimeout),
+        props = RequestActor.props(req, sender, routingPlan.generatePlan(req, liveHosts)(log), defaultRequestTimeout),
         name = "request-actor-" + actorNameIndex.next()
       )
 
@@ -332,7 +334,7 @@ object ClusterConnector {
         context.stop(self)
       } else {
         val host = plan.next()
-        log.debug("Sending request {} to host {}", req, host)
+        log.debug("Using host {} for request {}", host, req)
         host.connection ! req
 
         context.become {
@@ -392,7 +394,7 @@ object ClusterConnector {
 
     var index = 0
 
-    def generatePlan(req: AthenaRequest, state: IndexedSeq[ConnectedHost]): Iterator[ConnectedHost] = {
+    def generatePlan(req: AthenaRequest, state: IndexedSeq[ConnectedHost])(implicit log: LoggingAdapter): Iterator[ConnectedHost] = {
 
       val startIndex = index
 
@@ -412,7 +414,11 @@ object ClusterConnector {
         var hostsRemaining = hostsSize
         var nextValue = computeNext()
 
-        def next(): ConnectedHost = nextValue.getOrElse(Iterator.empty.next())
+        def next(): ConnectedHost = {
+          val current = nextValue
+          nextValue = computeNext()
+          current.getOrElse(Iterator.empty.next())
+        }
 
         def hasNext: Boolean = nextValue.isDefined
 

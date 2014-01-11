@@ -29,6 +29,14 @@ trait Session {
                    consistency: Consistency = Consistency.ONE,
                    serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Enumerator[Row]
 
+  def executeUpdate(query: String,
+                   values: Seq[CValue] = Seq(),
+                   keyspace: Option[String] = None,
+                   routingKey: Option[ByteString] = None,
+                   consistency: Consistency = Consistency.ONE,
+                   serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Future[Unit]
+
+
   /**
    * This method must be called to properly dispose of the Session.
    */
@@ -44,9 +52,9 @@ object Session {
   /**
    * Create a session using an existing ActorSystem
    */
-  def apply(initialHosts: Set[InetAddress], port: Int)(implicit system: ActorSystem): Session = {
+  def apply(initialHosts: Set[InetAddress], port: Int, keyspace: Option[String] = None)(implicit system: ActorSystem): Session = {
     import system.dispatcher
-    val connection = getConnection(initialHosts, port, None, system)
+    val connection = getConnection(initialHosts, port, keyspace, system)
     new SimpleSession(connection) {
       def close(): Unit = {
         //shutdown our actor
@@ -68,6 +76,7 @@ object Session {
 
     private[this] val pipeline = Pipelining.pipeline(connection)
     private[this] val queryPipeline = Pipelining.queryPipeline(pipeline)
+    private[this] val updatePipeline = Pipelining.updatePipeline(pipeline)
 
     def executeQuery(query: String,
                      values: Seq[CValue] = Seq(),
@@ -77,6 +86,16 @@ object Session {
                      serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Enumerator[Row] = {
       queryPipeline(SimpleStatement(query, values, keyspace, routingKey, Some(consistency), Some(serialConsistency)))
     }
+
+    def executeUpdate(query: String,
+                      values: Seq[CValue] = Seq(),
+                      keyspace: Option[String] = None,
+                      routingKey: Option[ByteString] = None,
+                      consistency: Consistency = Consistency.ONE,
+                      serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Future[Unit] = {
+      updatePipeline(SimpleStatement(query, values, keyspace, routingKey, Some(consistency), Some(serialConsistency)))
+    }
+
   }
 
 }

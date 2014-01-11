@@ -39,6 +39,17 @@ object Pipelining {
       }
   }
 
+  def updatePipeline(pipeline: Pipeline)(implicit ec: ExecutionContext, timeout: Timeout): Statement => Future[Unit] = {
+    stmt =>
+      pipeline(stmt).map {
+        case Successful(_) =>
+          //everything went as planned
+          ()
+        case x =>
+          throw new InternalException(s"Expected Successful back from an update, got $x instead.")
+      }
+  }
+
   /**
    * Create a new pipeline that has the ability to asynchronously execute a Statement and
    * return an Enumerator of the resulting rows.

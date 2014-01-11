@@ -51,12 +51,21 @@ sealed trait CValue {
 
 object CValue {
 
+  def apply[T: Writes](o: T) = toValue(o)
+
   /**
    * Provided a Reads implicit for its type is available, convert any object into a CValue.
    *
    * @param o Value to convert to a CValue.
    */
-  def toValue[T](o: T)(implicit tjs: Writes[T]): CValue = tjs.writes(o)
+  def toValue[T](o: T)(implicit tjs: Writes[T]): CValue = {
+    //shouldn't really have to check for this in a perfect world, but whatever
+    if(o == null) {
+      CNull
+    } else {
+      tjs.writes(o)
+    }
+  }
 
   /**
    * Provided a Writes implicit for that type is available, convert a CValue to any type.
