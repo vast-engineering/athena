@@ -113,10 +113,10 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
         context.become(whileConnected(newHosts))
 
       case Failure(e) =>
-        log.warning("Cluster metadata failed. Disconnecting.", e)
+        log.error(e, "Cluster metadata failed. Disconnecting.")
         //TODO - depending on the failure, we may want to just stop ourselves
         context.unwatch(connection)
-        context.stop(connection)
+        context.actorOf(CloseActor.props(connection, Athena.Close, settings.localNodeSettings.closeTimeout))
         context.become(reconnect(hosts))
 
       case Terminated(`connection`) =>

@@ -11,6 +11,7 @@ import play.api.libs.iteratee.{Enumeratee, Enumerator}
 import athena.Responses.Timedout
 import athena.Responses.ErrorResponse
 import spray.util.LoggingContext
+import akka.dispatch.ForkJoinExecutorConfigurator.AkkaForkJoinTask
 
 object Pipelining {
   type Pipeline = AthenaRequest => Future[AthenaResponse]
@@ -36,14 +37,21 @@ object Pipelining {
         case x =>
           log.error("Unknown response to query {} - {}", request, x)
           throw new InternalException(s"Unknown response to query $request - $x")
+      } recover {
+        case e: AskTimeoutException =>
+          throw new QueryTimeoutException("Query execution timed out.")
       }
   }
 
-  def updatePipeline(pipeline: Pipeline)(implicit ec: ExecutionContext, timeout: Timeout): Statement => Future[Unit] = {
+  def updatePipeline(pipeline: Pipeline)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Future[Unit] = {
     stmt =>
       pipeline(stmt).map {
-        case Successful(_) =>
+        case s: Successful =>
           //everything went as planned
+          ()
+        case r: Rows =>
+          log.warning("Got rows back from update query.")
+          //just ignore them
           ()
         case x =>
           throw new InternalException(s"Expected Successful back from an update, got $x instead.")
@@ -70,16 +78,20 @@ object Pipelining {
     }
   }
 
-  private def rowsEnumerator(pipeline: Pipeline)(implicit ec: ExecutionContext): Statement => Enumerator[Row] = {
+  private def rowsEnumerator(pipeline: Pipeline)(implicit ec: ExecutionContext, log: LoggingContext): Statement => Enumerator[Row] = {
     stmt =>
-      val enum = Enumerator.unfoldM[Option[Query], Rows](Some(stmt: Query)) { q =>
+      val enum = Enumerator.unfoldM[Option[Query], Rows](Some(stmt)) { q =>
         if(q.isEmpty) {
           Future.successful(None)
         } else {
           pipeline(q.get).map {
-            case rows: Rows =>
-              val nextQ: Option[Query] = rows.pagingState.map(FetchRows(stmt, _))
+            case rows@Rows(_, _, _, pagingState) =>
+              val nextQ = pagingState.map(ps => FetchRows(stmt, ps))
               Some(nextQ, rows)
+            case s: Successful =>
+              //shouldn't really get this, but it's not technically an error
+              log.warning("Expected rows from query, got empty Successful response instead.")
+              None
             case x =>
               throw new InternalException(s"Expected Rows back from a query, got $x instead.")
           }

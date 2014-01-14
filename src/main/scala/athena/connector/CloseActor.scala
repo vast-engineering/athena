@@ -20,16 +20,17 @@ private[connector] class CloseActor(connection: ActorRef, closeCmd: Athena.Close
   def receive: Receive = {
     case evt: Athena.ConnectionClosed =>
       //everything went okay
-      context.stop(connection)
-      context.stop(self)
+      log.debug("Got closed message from actor.")
+      //note - we don't stop the connection here, the assumption is that it will stop on it's own
+      //we do give it a reasonable time to stop - if it doesn't, we kill it manually.
 
     case Terminated(`connection`) =>
-      //this is strange
-      log.debug("Connection actor terminated before recieve of Closed event.")
+      log.debug("Connection actor terminated")
       context.stop(self)
 
     case ReceiveTimeout =>
       log.warning("Connection actor did not close within specified timeout interval. Killing actor.")
+      context.unwatch(connection)
       context.stop(connection)
       context.stop(self)
 

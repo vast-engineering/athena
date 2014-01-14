@@ -136,9 +136,6 @@ object Athena extends ExtensionKey[AthenaExt] {
     override def event = Aborted
   }
 
-  case class CloseAll(kind: CloseCommand) extends ConnectionCommand
-  object CloseAll extends CloseAll(Close)
-
   /**
    * Commands suitable for a node connector
    */
