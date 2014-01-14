@@ -1,33 +1,37 @@
 package athena.connector
 
-import athena.{ClusterConnectorSettings, Athena}
+import athena.{Responses, ClusterConnectorSettings, Athena}
 import akka.actor._
 import akka.pattern._
 import athena.Requests.AthenaRequest
-import athena.connector.ClusterInfo.{ClusterMetadata, Host}
-import athena.Responses.{Timedout, RequestFailed, AthenaResponse}
-import athena.connector.NodeConnector.{NodeConnected, NodeUnavailable}
-import scala.concurrent.duration.{FiniteDuration, Duration}
-import akka.actor.Status.Failure
-import athena.Athena.{ClusterConnectorSetup, NoHostAvailableException}
+import athena.Responses.AthenaResponse
+import scala.concurrent.duration.Duration
+import athena.Athena._
 import java.net.{InetSocketAddress, InetAddress}
-import akka.util.Timeout
-import java.util.concurrent.TimeUnit
-import scala.util.control.NonFatal
-import spray.util.LoggingContext
 import akka.event.LoggingAdapter
+import athena.connector.ClusterMonitorActor.{ClusterUnreachable, ClusterReconnected}
+import athena.Athena.NodeDisconnected
+import athena.Responses.RequestFailed
+import scala.Some
+import athena.Athena.NodeConnected
+import athena.Responses.ConnectionUnavailable
+import akka.actor.Terminated
+import athena.Responses.Timedout
+import athena.connector.ClusterInfo.ClusterMetadata
+import java.util.concurrent.TimeUnit
 
-private[athena] class ClusterConnector(initialHosts: Set[InetAddress],
+private[athena] class ClusterConnector(commander: ActorRef, //this actor will be sent status messages
+                                       initialHosts: Set[InetAddress],
                                        port: Int,
                                        keyspace: Option[String],
-                                       settings: ClusterConnectorSettings) extends Actor with ActorLogging with Stash {
+                                       settings: ClusterConnectorSettings) extends Actor with ActorLogging {
 
   import ClusterConnector._
 
   import context.dispatcher
 
-  //sign a death pact with the monitor - we need it to operate
-  private[this] val monitorActor = context.watch {
+  //create and sign a death pact with the monitor - we need it to operate
+  context.watch {
     context.actorOf(
       props = Props(new ClusterMonitorActor(self, initialHosts, port, settings)),
       name = "cluster-monitor"
@@ -38,287 +42,254 @@ private[athena] class ClusterConnector(initialHosts: Set[InetAddress],
 
   private[this] val routingPlan = new RoutingPlan()
 
-  private var clusterMetadata: ClusterMetadata = ClusterMetadata(None, None, Map.empty)
-  
-  private var disconnectedHosts: Map[InetAddress, DisconnectedHost] = Map.empty
-  private var connectingHosts: Map[InetAddress, ConnectingHost] = Map.empty
-  private var liveHosts: IndexedSeq[ConnectedHost] = IndexedSeq.empty
+  private[this] var clusterMetadata: ClusterMetadata = ClusterMetadata(None, None, Map.empty)
+
+  private[this] var pools: Map[InetAddress, ActorRef] = Map.empty
+  //we keep this around as an indexedseq as an optimization for the query planner
+  private[this] var liveHosts: IndexedSeq[ConnectedHost] = IndexedSeq.empty
 
   private[this] val actorNameIndex = Iterator from 0
 
-  def receive = starting
+  private[this] val defaultBehavior: Receive = {
+    case req: AthenaRequest =>
+      log.warning("Rejecting request due to default behavior")
+      sender ! ConnectionUnavailable(req)
 
-  private def starting: Receive = {
+    case cmd: Athena.CloseCommand =>
+      context.become(closing(cmd, Set(sender)))
+
+    case ClusterUnreachable =>
+      //let our commander know
+      pools.values.foreach(_ ! Disconnect)
+      commander ! ClusterDisconnected
+
+    case ClusterReconnected =>
+      //this is sent by the cluster monitor after it has been disconnected from every host in the cluster
+      //and has subsequently reconnected - we should tell all our pools to immediately attempt a reconnect
+      pools.values.foreach(_ ! Reconnect)
+      commander ! ClusterConnected
+
+  }
+
+
+  def receive = starting()
+
+  private def starting(): Receive = {
+
+    log.debug("Cluster connector starting.")
 
     val behavior: Receive = {
-      case meta: ClusterMetadata =>
-        //create our intitial host connection pools
-        meta.hosts.keySet.foreach(addPool)
-        clusterMetadata = meta
-
+      case ClusterReconnected =>
         context.become(initializing)
-
-      case req: AthenaRequest =>
-        //save the request until we're done starting up
-        stash()
     }
 
-    behavior orElse running
+    behavior orElse defaultBehavior
 
   }
 
   private def initializing: Receive = {
 
+    log.debug("Cluster connector initializing.")
+
     val behavior: Receive = {
+
+      case newMeta: ClusterMetadata =>
+        //we should receive cluster metadata from the monitor actor
+        mergeMetadata(newMeta)
+
       case NodeConnected(addr) =>
         //wait for at least one node to connect before we route any requests
-        markConnected(addr, sender)
-        unstashAll()
+
+        hostUp(addr)
         context.become(running)
-
-      case req: AthenaRequest =>
-        //save the request until we're done starting up
-        stash()
-
     }
 
-    behavior orElse running
+    behavior orElse defaultBehavior
   }
-
 
   private def running: Receive = {
 
-    case req: AthenaRequest =>
-      context.actorOf(
-        props = RequestActor.props(req, sender, routingPlan.generatePlan(req, liveHosts)(log), defaultRequestTimeout),
-        name = "request-actor-" + actorNameIndex.next()
-      )
+    log.info("Successfully connected to cassandra cluster '{}'", clusterMetadata.name.getOrElse("Unknown"))
+    log.debug("Cluster connector running with hosts {}", pools.keySet)
 
-    case newMeta: ClusterMetadata =>
-      //find the set of newly added hosts
-      val currentHosts = clusterMetadata.hosts.keySet
-      val newHosts = newMeta.hosts.keySet
+    commander ! ClusterConnected
 
-      val addedHosts = newHosts.diff(currentHosts)
-      val removedHosts = currentHosts.diff(newHosts)
+    context.setReceiveTimeout(Duration(10, TimeUnit.SECONDS))
 
-      addedHosts.foreach(addPool)
-      removedHosts.foreach(removePool)
-      
-      clusterMetadata = newMeta
+    val behavior: Receive = {
+      case req: AthenaRequest =>
+        context.actorOf(
+          props = RequestActor.props(req, sender, routingPlan.generatePlan(req, liveHosts)(log), defaultRequestTimeout),
+          name = "request-actor-" + actorNameIndex.next()
+        )
 
-    case Terminated(pool) if openConnections.contains(pool) =>
-       connectionTerminated(pool)
+      case newMeta: ClusterMetadata =>
+        mergeMetadata(newMeta)
 
-    case NodeConnected(addr) =>
-      markConnected(addr, sender)
+      case NodeConnected(addr) =>
+        hostUp(addr)
 
-    case HostStatusChanged(addr, isUp) =>
-      if(isUp) {
-        addPool(addr)
-      } else {
-        log.debug("Closing pool for {}", addr)
-        //kill any live connections
-        removePool(addr)
-        scheduleReconnection(addr, 0)
+      case NodeDisconnected(addr) =>
+        hostDown(addr)
+
+      case HostStatusChanged(addr, isUp) =>
+        //this is sent from the cluster monitor when the cluster signals a node is available
+        togglePool(addr, isUp)
+
+    }
+
+    behavior orElse defaultBehavior
+  }
+
+  private def closing(closeCommand: Athena.CloseCommand, commanders: Set[ActorRef]): Receive = {
+
+    context.setReceiveTimeout(settings.localNodeSettings.closeTimeout)
+
+    log.info("Closing cluster connector with {} live pools.", pools.size)
+
+    def step(closeActors: Set[ActorRef], commanders: Set[ActorRef]): Receive = {
+
+      def signalDone() {
+        commanders.foreach(_ ! closeCommand.event)
+        context.stop(self)
       }
 
-    case Reconnect(host) =>
-      if(liveHosts.exists(_.addr == host) || connectingHosts.contains(host)) {
-        log.error("Cannot execute reconnection for connected host {}", host)
+      if(closeActors.isEmpty) {
+        signalDone()
+        defaultBehavior
       } else {
-        disconnectedHosts.get(host).map { dh =>
-          openConnection(dh.addr, dh.retryCount)
-        } getOrElse {
-          log.error("Cannot reconnect to host {} - no entry in table.", host)
+        {
+          case Terminated(closeActor) if closeActors.contains(closeActor) =>
+            context.become(step(closeActors - closeActor, commanders))
+
+          case req: AthenaRequest =>
+            log.warning("Rejecting request because connector is shutting down.")
+            sender ! Responses.RequestFailed(req)
+
+          case cmd: Athena.CloseCommand =>
+            log.debug("Ignoring close command {} - already shutting down.", cmd)
+            context.become(step(closeActors, commanders + sender))
+
+          case ReceiveTimeout =>
+            log.warning("Timed out waiting for pools to close. Just stopping now.")
+            signalDone()
         }
       }
-
-    case c: Athena.CloseCommand =>
-      context.setReceiveTimeout(defaultRequestTimeout)
-      context.become(closing(c, sender, closeAll()))
-
-  }
-
-  private def closing(closeCommand: Athena.CloseCommand, commander: ActorRef, liveConnections: Set[ActorRef]): Receive = {
-    case Terminated(pool) =>
-      context.become(closing(closeCommand, commander, liveConnections - pool))
-    case ReceiveTimeout =>
-      log.warning("Timed out waiting for pools to close. Just stopping now.")
-      commander ! closeCommand.event
-      context.stop(self)
-  }
-
-  private def openConnections: Set[ActorRef] = connectingHosts.values.map(_.connection).toSet ++ liveHosts.map(_.connection).toSet
-
-  private def connectionTerminated(pool: ActorRef) {
-    log.debug("Pool actor {} terminated.", pool)
-
-    //filter this pool out of any of the live or connecting hosts
-    val (liveTerminated, liveKept) = liveHosts.partition(_.connection == pool)
-    liveHosts = liveKept
-    val (connectingTerminated, connectingKept) = connectingHosts.partition(_._2.connection == pool)
-    connectingHosts = connectingKept
-
-    //get a tuple of the host address and retry count (if present)
-    val terminatedAddresses = liveTerminated.map(lh => lh.addr -> 0) ++ connectingTerminated.values.map(ch => ch.addr -> ch.retryCount)
-
-    if(terminatedAddresses.size == 0) {
-      log.warning("Cannot find pool for terminated connection Actor {}", pool)
-    } else {
-      val disconnectedHost = terminatedAddresses.head
-      if(!terminatedAddresses.tail.isEmpty) {
-        log.warning("More than one host entry for host {} - discarding all but first.", disconnectedHost._1)
-      }
-      scheduleReconnection(disconnectedHost._1, disconnectedHost._2)
     }
-  }
 
-  private def markConnected(host: InetAddress, connection: ActorRef) {
-    //sent after a node successfully connects
-    if(liveHosts.exists(_.addr == host)) {
-      log.error("Got connection message from already connected host {}", host)
-    } else {
-      if(disconnectedHosts.get(host).exists(_.retryCount > 0) || connectingHosts.get(host).exists(_.retryCount > 0)) {
-        log.info("Reconnected to host {}", host)
-      }
-      //filter this host out of any of the disconnected or connecting hosts
-      disconnectedHosts.get(host).foreach(_.reconnectJob.cancel())
-      disconnectedHosts = disconnectedHosts - host
-
-      connectingHosts = connectingHosts - host
-
-      //now add it to the list of live hosts
-      liveHosts = liveHosts :+ ConnectedHost(host, connection)
-    }
-  }
-
-  private def closeAll(): Set[ActorRef] = {
-    val allConnections = liveHosts.map(_.connection).toSet ++ connectingHosts.values.map(_.connection).toSet
+    val closeActors =  pools.values.map { pool =>
+      context.watch(closePool(pool))
+    }.toSet
 
     liveHosts = IndexedSeq.empty
-    connectingHosts = Map.empty
+    pools = Map.empty
 
-    disconnectedHosts.values.foreach(_.reconnectJob.cancel())
-    disconnectedHosts = Map.empty
+    step(closeActors, commanders)
+  }
 
-    allConnections.foreach(_ ! Athena.Close)
-    allConnections
+  //called in reaction to a pool signalling that it's available
+  private def hostUp(host: InetAddress, sendReconnect: Boolean = false) {
+    pools.get(host).foreach { pool =>
+      //this may be a new host - if we don't know about it yet, we don't add a pool
+      //only bring it up after we've synched metadata
+      if(liveHosts.exists(_.addr == host)) {
+        log.warning("Got connection message from already connected host {}", host)
+      } else {
+        //now add it to the list of live hosts
+        liveHosts = liveHosts :+ ConnectedHost(host, pool)
+      }
+    }
+  }
+
+  //called in reaction to a pool signalling that it's disconnected
+  private def hostDown(host: InetAddress) {
+    //sent when a node goes down
+    if(!pools.contains(host)) {
+      //sanity check - this should not happen, ever
+      log.warning("Got down message for unknown host {}", host)
+    } else {
+      liveHosts = liveHosts.filterNot(_.addr == host)
+    }
+  }
+
+  //instruct a pool to connect or disconnect
+  private def togglePool(host: InetAddress, connect: Boolean = true) {
+    pools.get(host).map { pool =>
+      if(connect) {
+        pool ! Reconnect
+      } else {
+        pool ! Disconnect
+      }
+    } getOrElse {
+      log.warning("No pool for host {} - cannot process toggle command.", host)
+    }
   }
 
   private def addPool(host: InetAddress) {
     log.debug("Adding pool for {}", host)
-    //check to see if it's a disconnected - if it is, cancel it's reconnect call
-    //and remove it from the list of disconnected hosts
-    val (removed, kept) = disconnectedHosts.partition(_._1 == host)
-    removed.values.foreach(h => h.reconnectJob.cancel())
-    disconnectedHosts = kept
-
-    //if we have an inflight connection attempt for this host, just use that
-    //otherwise open a connection
-    if(!connectingHosts.contains(host)) {
-      val existingPool = liveHosts.find(_.addr == host)
-      if(existingPool.isDefined) {
-        log.warning("Not adding pool for already existing host {}", host)
-      } else {
-        openConnection(host)
-      }
+    if(pools.contains(host)) {
+      throw new IllegalStateException(s"Cannot add pool for already existing host $host")
     }
+    val pool = context.watch {
+      context.actorOf(
+        props = NodeConnector.props(self, new InetSocketAddress(host, port), keyspace, settings.localNodeSettings),
+        name = "node-connector-" + actorNameIndex.next() + "-" + host.getHostAddress
+      )
+    }
+
+    pools = pools.updated(host, pool)
   }
 
   private def removePool(host: InetAddress) {
-    //remove any disconnected (and thus waiting for reconnection) hosts
-    disconnectedHosts.get(host).foreach(h => h.reconnectJob.cancel())
-    disconnectedHosts = disconnectedHosts - host
+    val pool = pools.getOrElse(host, throw new IllegalStateException(s"Cannot find pool for host $host"))
 
-    //stop any in process connection attempts for this host
-    connectingHosts.get(host).foreach(h => context.stop(h.connection))
-    connectingHosts = connectingHosts - host
+    pools = pools - host
+    liveHosts = liveHosts.filterNot(_.addr == host)
 
-    val (removedLive, keptLive) = liveHosts.partition(_.addr == host)
-    removedLive.foreach(h => closePool(h.connection))
-    liveHosts = keptLive
+    closePool(pool)
   }
 
-  def scheduleReconnection(host: InetAddress, retryCount: Int) {
-    if(liveHosts.exists(_.addr == host) || connectingHosts.contains(host)) {
-      log.error("Cannot schedule reconnection for connected host {}", host)
-    } else {
-
-      //kill any outstanding reconnection requests
-      disconnectedHosts.get(host).foreach(_.reconnectJob.cancel())
-      disconnectedHosts = disconnectedHosts - host
-
-      val delay = reconnectDelay(retryCount)
-      log.info("Host {} is unreachable - scheduling reconnection in {}", host.getCanonicalHostName, delay)
-      val recoJob = context.system.scheduler.scheduleOnce(delay) {
-        self ! Reconnect(host)
-      }
-      disconnectedHosts = disconnectedHosts.updated(host, DisconnectedHost(host, retryCount + 1, recoJob))
-    }
-  }
-
-
-  private def openConnection(host: InetAddress, retryCount: Int = 0) {
-    if(liveHosts.exists(_.addr == host) || connectingHosts.contains(host)) {
-      log.error("Connection to host {} already open.")
-    } else {
-      disconnectedHosts.get(host).foreach(_.reconnectJob.cancel())
-      disconnectedHosts = disconnectedHosts - host
-
-      val connection = context.watch {
-        context.actorOf(
-          props = NodeConnector.props(new InetSocketAddress(host, port), keyspace, settings.localNodeSettings),
-          name = "node-connector-" + actorNameIndex.next() + "-" + host.getHostAddress
-        )
-      }
-      connectingHosts = connectingHosts.updated(host, ConnectingHost(host, retryCount, connection))
-    }
-  }
-
-  private def closePool(pool: ActorRef) = {
-    //pools have 5 seconds to close before we hard kill them
+  private def closePool(pool: ActorRef): ActorRef = {
     context.unwatch(pool)
-    pool.ask(Athena.Close)(Timeout(5, TimeUnit.SECONDS)).onFailure {
-      case e: AskTimeoutException =>
-        log.debug("Close of pool timed out. Hard stopping actor.")
-        context.stop(pool)
-      case NonFatal(e) =>
-        log.error("Unknown error stopping pool. Hard stopping actor. {}", e)
-        context.stop(pool)
-    }
+    context.actorOf(CloseActor.props(pool, Athena.Close, settings.localNodeSettings.closeTimeout))
+  }
+
+  private def mergeMetadata(newMeta: ClusterMetadata) {
+    //find the set of newly added hosts
+    val currentHosts = clusterMetadata.hosts.keySet
+    val newHosts = newMeta.hosts.keySet
+
+    val addedHosts = newHosts.diff(currentHosts)
+    val removedHosts = currentHosts.diff(newHosts)
+
+    addedHosts.foreach(addPool)
+    removedHosts.foreach(removePool)
+
+    clusterMetadata = newMeta
   }
 
 }
 
-object ClusterConnector {
+private[athena] object ClusterConnector {
 
-  def props(initialHosts: Set[InetAddress],
+  def props(commander: ActorRef,
+            initialHosts: Set[InetAddress],
             port: Int,
             keyspace: Option[String],
             settings: ClusterConnectorSettings): Props = {
-    Props(new ClusterConnector(initialHosts, port, keyspace, settings))
+    Props(new ClusterConnector(commander, initialHosts, port, keyspace, settings))
   }
 
-  def props(setup: ClusterConnectorSetup): Props = {
-    props(setup.initialHosts, setup.port, setup.keyspace, setup.settings.get)
-  }
-
-  private case class DisconnectedHost(addr: InetAddress, retryCount: Int, reconnectJob: Cancellable)
-  private case class ConnectingHost(addr: InetAddress, retryCount: Int, connection: ActorRef)
   private case class ConnectedHost(addr: InetAddress, connection: ActorRef)
 
-  private case class Reconnect(addr: InetAddress)
-
   //sent by various partners of this Actor to indicate that the status of a given Host has changed
-  case class HostStatusChanged(host: InetAddress, isUp: Boolean)
+  private[connector] case class HostStatusChanged(host: InetAddress, isUp: Boolean)
 
-  class RequestActor(req: AthenaRequest, respondTo: ActorRef, plan: Iterator[ConnectedHost], timeout: Duration) extends Actor with ActorLogging {
+  private class RequestActor(req: AthenaRequest, respondTo: ActorRef, plan: Iterator[ConnectedHost], timeout: Duration) extends Actor with ActorLogging {
 
     //
     // TODO - add retry policy logic
     //
-
     context.setReceiveTimeout(timeout)
 
     var errors: Map[InetAddress, Any] = Map.empty
@@ -330,11 +301,11 @@ object ClusterConnector {
     def attemptRequest() {
       if(!plan.hasNext) {
         //out of options here,
-        respondTo ! Failure(new NoHostAvailableException("No hosts available for query.", errors))
+        respondTo ! ConnectionUnavailable(req)
         context.stop(self)
       } else {
         val host = plan.next()
-        log.debug("Using host {} for request {}", host, req)
+        log.debug("Using host {} for request.", host)
         host.connection ! req
 
         context.become {
@@ -346,11 +317,6 @@ object ClusterConnector {
               respondTo ! resp
               context.stop(self)              
             }
-
-          case x@NodeUnavailable(_) =>
-            //try the next node
-            errors = errors.updated(host.addr, x)
-            attemptRequest()
 
           case ReceiveTimeout =>
             log.warning("Request timed out.")
@@ -377,13 +343,6 @@ object ClusterConnector {
   object RequestActor {
     def props(req: AthenaRequest, respondTo: ActorRef, plan: Iterator[ConnectedHost], timeout: Duration) =
       Props(new RequestActor(req, respondTo, plan, timeout))
-  }
-
-  private val BaseRecoDelay: Long = 1000 //1 second
-  private val MaxRecoDelay: Long = 10 * 60 * 1000 //10 minutes
-  private def reconnectDelay(retryCount: Int = 0): FiniteDuration = {
-    //this calculates an exponential reconnection delay dropoff
-    Duration(math.min(BaseRecoDelay * (1L << retryCount), MaxRecoDelay), TimeUnit.MILLISECONDS)
   }
 
   // TODO: Add more complex (e.g. by token) routing plans

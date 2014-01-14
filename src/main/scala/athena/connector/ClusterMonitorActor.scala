@@ -21,7 +21,7 @@ import akka.actor.Terminated
 import athena.connector.ClusterInfo.ClusterMetadata
 import athena.connector.ClusterConnector.HostStatusChanged
 
-private[athena] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set[InetAddress], port: Int, settings: ClusterConnectorSettings)
+private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set[InetAddress], port: Int, settings: ClusterConnectorSettings)
   extends Actor with ActorLogging with ClusterUtils {
 
   import ClusterMonitorActor._
@@ -39,9 +39,13 @@ private[athena] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set[In
   def unconnected(hosts: Map[InetAddress, HostInfo]): Receive = {
     context.setReceiveTimeout(Duration.Inf)
 
-    log.error("Cluster Monitor unconnected - scheduling reconnect attempt.")
+    // TODO - eventually make this parameterizable
+    val delay = defaultTimeoutDuration
+    log.error("No host in cluster is reachable. Attempting reconnection in {}", delay)
+    commander ! ClusterUnreachable
+
     //reschedule a connection attempt for 10 seconds from now
-    context.system.scheduler.scheduleOnce(defaultTimeoutDuration)(self ! 'reconnect)
+    context.system.scheduler.scheduleOnce(delay)(self ! 'reconnect)
 
     {
       case 'reconnect =>
@@ -60,7 +64,6 @@ private[athena] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set[In
     def tryConnect(connectionHosts: IndexedSeq[HostInfo]): Receive = {
 
       if(connectionHosts.isEmpty) {
-        log.warning("All hosts exhausted - moving to unconnected state.")
         unconnected(allHosts)
       } else {
         val host = connectionHosts.head
@@ -72,14 +75,19 @@ private[athena] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set[In
         {
           case Athena.Connected(remote, local) =>
             log.debug("Cluster monitor connected to {}", remote)
+            if(unconditional) {
+              //if unconditional is true, that means that all hosts were previously exhausted
+              //we should tell the cluster manager to immediately attempt a reconnect
+              commander ! ClusterReconnected
+            }
             context.become(connected(sender, host, allHosts))
 
           case Athena.CommandFailed(Athena.Connect(remoteHost, _, _, _)) =>
-            log.warning("Connectiong to host {} failed, trying next host.", connectionHosts.head)
+            log.debug("Connection to host {} failed, trying next host.", connectionHosts.head.addr)
             context.become(tryConnect(connectionHosts.tail))
 
           case ReceiveTimeout =>
-            log.warning("Connecting to host {} timed out, trying next host.", connectionHosts.head)
+            log.debug("Connection attempt to host {} timed out, trying next host.", connectionHosts.head.addr)
             context.become(tryConnect(connectionHosts.tail))
         }
       }
@@ -125,7 +133,7 @@ private[athena] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set[In
               updateClusterInfo(connectedHost.addr, pipeline) pipeTo self
               HostInfo(addr.getAddress, isUp)
             }
-            context.parent ! HostStatusChanged(addr.getAddress, isUp)
+            commander ! HostStatusChanged(addr.getAddress, isUp)
             context.become(whileConnected(hosts.updated(addr.getAddress, host)))
 
           case NewNode(socketAddr) =>
@@ -170,10 +178,14 @@ private[athena] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set[In
 
 }
 
-object ClusterMonitorActor {
+private[connector] object ClusterMonitorActor {
 
   private case class HostInfo(addr: InetAddress, isUp: Boolean = true)
-  
+
+  //sent to the cluster after a successful reconnection attempt after all hosts are unreachable
+  case object ClusterReconnected
+  case object ClusterUnreachable
+
   //a simple little stateful class that generates lists of hosts
   //in a round robin fashion
   //this is a stateful class, but since it's entirely referenced inside our Actor, it's okay

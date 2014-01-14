@@ -25,7 +25,7 @@ object Athena extends ExtensionKey[AthenaExt] {
 
   case class ConnectionError(host: String, port: Int) extends Error {
     def message: String = s"Connection to $host:$port failed."
-    def toThrowable: Throwable = new ConnectionAttemptFailedException(host, port)
+    def toThrowable: Throwable = new AthenaException(message)
   }
 
   //base trait for all messages to and from these actors
@@ -37,7 +37,9 @@ object Athena extends ExtensionKey[AthenaExt] {
   /**
    * A Command that can be sent to the extension itself.
    */
-  trait ExtensionCommand extends Command
+  sealed trait ExtensionCommand extends Command
+
+  sealed trait ConnectionCreationCommand extends ExtensionCommand
 
   /**
    * A command to initiate a single connection to a single Cassandra node.
@@ -45,7 +47,7 @@ object Athena extends ExtensionKey[AthenaExt] {
   case class Connect(remoteAddress: InetSocketAddress,
                      keyspace: Option[String],
                      settings: Option[ConnectionSettings],
-                     eventHandler: Option[ActorRef]) extends ExtensionCommand
+                     eventHandler: Option[ActorRef]) extends ConnectionCreationCommand
   object Connect {
     def apply(host: String, port: Int, keyspace: Option[String], settings: Option[ConnectionSettings] = None): Connect = {
       val address = new InetSocketAddress(host, port)
@@ -54,11 +56,15 @@ object Athena extends ExtensionKey[AthenaExt] {
   }
 
   /**
-   * A command to initiate a managed connection pool to a single Cassandra node
+   * A command to initiate a managed connection pool to a single Cassandra node.
+   *
+   * @param remoteAddress The host and port to connect to.
+   * @param keyspace The optional keyspace to use for connections in the pool.
+   * @param settings Settings for the pool - if this is not defined, default settings read from the ActorSystem's config will be used.
    */
   case class NodeConnectorSetup(remoteAddress: InetSocketAddress,
                                 keyspace: Option[String],
-                                settings: Option[NodeConnectorSettings] = None) extends ExtensionCommand {
+                                settings: Option[NodeConnectorSettings] = None) extends ConnectionCreationCommand {
     private[athena] def normalized(implicit refFactory: ActorRefFactory) =
       if (settings.isDefined) {
         this
@@ -70,15 +76,21 @@ object Athena extends ExtensionKey[AthenaExt] {
   object NodeConnectorSetup {
     def apply(host: String, port: Int,
               keyspace: Option[String],
-              settings: Option[NodeConnectorSettings])(implicit refFactory: ActorRefFactory): NodeConnectorSetup =
+              settings: Option[NodeConnectorSettings])
+              (implicit refFactory: ActorRefFactory): NodeConnectorSetup =
       NodeConnectorSetup(new InetSocketAddress(host, port), keyspace, settings).normalized
   }
 
   /**
-   * A command to initiate a connection to a cluster of Cassandra nodes
+   * A command to initiate a connection to a cluster of Cassandra nodes.
+   *
+   * @param initialHosts A list of host addressed used to seed the cluster.
+   * @param port the port used to connect
+   * @param keyspace The optional keyspace to use for connections in the cluster.
+   * @param settings Settings for the cluster - if this is not defined, default settings read from the ActorSystem's config will be used.
    */
   case class ClusterConnectorSetup(initialHosts: Set[InetAddress], port: Int, keyspace: Option[String],
-                                   settings: Option[ClusterConnectorSettings] = None) extends ExtensionCommand {
+                                   settings: Option[ClusterConnectorSettings] = None) extends ConnectionCreationCommand {
     private[athena] def normalized(implicit refFactory: ActorRefFactory) =
       if (settings.isDefined) this
       else copy(settings = Some(ClusterConnectorSettings(actorSystem)))
@@ -127,22 +139,39 @@ object Athena extends ExtensionKey[AthenaExt] {
   case class CloseAll(kind: CloseCommand) extends ConnectionCommand
   object CloseAll extends CloseAll(Close)
 
+  /**
+   * Commands suitable for a node connector
+   */
+  sealed trait NodeCommand
+
+  /**
+   * Instruct a node connector to immediately attempt a reconnection (if disconnected)
+   */
+  case object Reconnect extends NodeCommand
+
+  /**
+   * Instruct a node connector to disconnect it's pool. Reconnection attempts will be scheduled.
+   */
+  case object Disconnect extends NodeCommand
+
 
   /// events
   trait Event extends Message
+
+  sealed trait ConnectionCreatedEvent extends Event
 
   /**
    * The connection actor sends this message to the sender of a [[athena.Athena.Connect]]
    * command. The connection is characterized by the `remoteAddress`
    * and `localAddress` TCP endpoints.
    */
-  case class Connected(remoteAddress: InetSocketAddress, localAddress: InetSocketAddress) extends Event
+  case class Connected(remoteAddress: InetSocketAddress, localAddress: InetSocketAddress) extends ConnectionCreatedEvent
 
   /**
    * Sent on successful creation of a node or cluster connector.
    */
-  case class NodeConnectorInfo(nodeConnector: ActorRef, setup: NodeConnectorSetup) extends Event
-  case class ClusterConnectorInfo(clusterConnector: ActorRef, setup: ClusterConnectorSetup) extends Event
+  case class NodeConnectorInfo(nodeConnector: ActorRef, setup: NodeConnectorSetup) extends ConnectionCreatedEvent
+  case class ClusterConnectorInfo(clusterConnector: ActorRef, setup: ClusterConnectorSetup) extends ConnectionCreatedEvent
 
 
   /**
@@ -201,7 +230,17 @@ object Athena extends ExtensionKey[AthenaExt] {
    */
   case class CommandFailed(cmd: Command) extends Event
 
+  /**
+   * Events emitted by a node connector.
+   */
+  sealed trait NodeEvent extends Event
+  sealed trait ConnectedEvent extends NodeEvent
+  case class NodeConnected(host: InetAddress) extends ConnectedEvent
+  case object ClusterConnected extends ConnectedEvent
 
+  sealed trait DisconnectedEvent extends NodeEvent
+  case class NodeDisconnected(host: InetAddress) extends DisconnectedEvent
+  case object ClusterDisconnected extends DisconnectedEvent
 
   //exceptions
   class AthenaException(message: String, cause: Option[Throwable]) extends RuntimeException(message, cause.orNull) {
@@ -221,9 +260,9 @@ object Athena extends ExtensionKey[AthenaExt] {
   class ConnectionException(message: String) extends AthenaException(message)
   class AuthenticationException(message: String, host: InetSocketAddress) extends ConnectionException(s"Authentication error on host $host: $message")
 
-  class ConnectionAttemptFailedException(val host: String, val port: Int) extends ConnectionException(s"Connection attempt to $host:$port failed")
+//  class ConnectionAttemptFailedException(val host: String, val port: Int) extends ConnectionException(s"Connection attempt to $host:$port failed")
 
-  class NoHostAvailableException(message: String, val errors: Map[InetAddress, Any]) extends AthenaException(message)
+//  class NoHostAvailableException(message: String, val errors: Map[InetAddress, Any]) extends AthenaException(message)
 
   class QueryExecutionException(message: String) extends AthenaException(message)
   class UnavailableException(message: String, val consistency: Consistency, val required: Int, val alive: Int)

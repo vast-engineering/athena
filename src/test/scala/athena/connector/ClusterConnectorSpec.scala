@@ -1,7 +1,7 @@
 package athena.connector
 
 import akka.testkit.{ImplicitSender, DefaultTimeout, TestKit}
-import akka.actor.ActorSystem
+import akka.actor.{ActorRef, ActorSystem}
 import org.scalatest.{BeforeAndAfterAll, Matchers, WordSpecLike}
 import athena.{Athena, TestLogging}
 import akka.io.IO
@@ -22,21 +22,24 @@ with Matchers with BeforeAndAfterAll with TestLogging {
     shutdown(system)
   }
 
+  private def openConnection(keyspace: Option[String] = None): ActorRef = {
+    within(10 seconds) {
+      IO(Athena) ! Athena.ClusterConnectorSetup(Hosts, Port, keyspace, None)
+      expectMsgType[Athena.ClusterConnectorInfo]
+      val connector = lastSender
+      expectMsg(Athena.ClusterConnected)
+      connector
+    }
+
+  }
+
   "A Cluster connector" should {
     "start up properly" in {
-      within(10 seconds) {
-        IO(Athena) ! Athena.ClusterConnectorSetup(Hosts, Port, None, None)
-        expectMsgType[Athena.ClusterConnectorInfo]
-        lastSender
-      }
+      openConnection()
     }
 
     "execute a query" in {
-      val connector = within(10 seconds) {
-        IO(Athena) ! Athena.ClusterConnectorSetup(Hosts, Port, None, None)
-        expectMsgType[Athena.ClusterConnectorInfo]
-        lastSender
-      }
+      val connector = openConnection()
 
       val request = SimpleStatement("select * from testks.users")
       connector ! request
@@ -54,11 +57,7 @@ with Matchers with BeforeAndAfterAll with TestLogging {
     }
 
     "use an explicit keyspace" in {
-      val connector = within(10 seconds) {
-        IO(Athena) ! Athena.ClusterConnectorSetup(Hosts, Port, Some("testks"), None)
-        expectMsgType[Athena.ClusterConnectorInfo]
-        lastSender
-      }
+      val connector = openConnection(Some("testks"))
 
       val request = SimpleStatement("select * from users")
       connector ! request

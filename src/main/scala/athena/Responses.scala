@@ -26,6 +26,11 @@ object Responses {
    */
   case class Timedout(request: AthenaRequest) extends FailureResponse
 
+  /**
+   * Signals that a request could not be sent due to a connection problem
+   */
+  case class ConnectionUnavailable(request: AthenaRequest) extends FailureResponse
+
   sealed abstract class SuccessfulResponse extends AthenaResponse {
     def isFailure: Boolean = false
   }

@@ -1,7 +1,7 @@
 package athena.connector
 
 import akka.testkit.{ImplicitSender, DefaultTimeout, TestKit}
-import akka.actor.ActorSystem
+import akka.actor.{ActorRef, ActorSystem}
 import org.scalatest.{Matchers, WordSpecLike, BeforeAndAfterAll}
 import akka.io.IO
 
@@ -25,21 +25,23 @@ with Matchers with BeforeAndAfterAll with TestLogging {
 
   val hostAddress = Hosts.head.getHostAddress
 
+  private def openConnection(keyspace: Option[String] = None): ActorRef = {
+    within(10 seconds) {
+      IO(Athena) ! Athena.NodeConnectorSetup(hostAddress, Port, keyspace, None)
+      expectMsgType[Athena.NodeConnectorInfo]
+      val connection = lastSender
+      expectMsgType[Athena.NodeConnected]
+      connection
+    }
+  }
+
   "A NodeConnector" should {
     "start up properly" in {
-      within(10 seconds) {
-        IO(Athena) ! Athena.NodeConnectorSetup(hostAddress, Port, None, None)
-        expectMsgType[Athena.NodeConnectorInfo]
-        lastSender
-      }
+      openConnection()
     }
 
     "execute a query" in {
-      val connector = within(10 seconds) {
-        IO(Athena) ! Athena.NodeConnectorSetup(hostAddress, Port, None, None)
-        expectMsgType[Athena.NodeConnectorInfo]
-        lastSender
-      }
+      val connector = openConnection()
 
       val request = SimpleStatement("select * from testks.users")
       connector ! request
@@ -57,12 +59,7 @@ with Matchers with BeforeAndAfterAll with TestLogging {
     }
 
     "use an explicit keyspace" in {
-      val connector = within(10 seconds) {
-        IO(Athena) ! Athena.NodeConnectorSetup(hostAddress, Port, Some("testks"), None)
-        expectMsgType[Athena.NodeConnectorInfo]
-        lastSender
-      }
-
+      val connector = openConnection(Some("testks"))
       val request = SimpleStatement("select * from users")
       connector ! request
       val rows = expectMsgType[Rows]

@@ -1,7 +1,7 @@
 package athena.client
 
 import athena.{SerialConsistency, Consistency, Athena, ClusterConnectorSettings}
-import akka.actor.{ActorRef, ActorSystem}
+import akka.actor._
 
 import akka.io.IO
 import akka.pattern._
@@ -9,13 +9,16 @@ import akka.util.{Timeout, ByteString}
 import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.Duration
 import java.net.InetAddress
-import athena.Requests.SimpleStatement
 import play.api.libs.iteratee.Enumerator
 import scala.concurrent.{ExecutionContext, Future}
 import athena.data.CValue
 import athena.Consistency.Consistency
 import athena.SerialConsistency.SerialConsistency
 import akka.event.{Logging, LoggingAdapter}
+import athena.Athena.AthenaException
+import akka.actor.Status.Failure
+import scala.Some
+import athena.Requests.SimpleStatement
 
 trait Session {
 
@@ -63,12 +66,43 @@ object Session {
     }
   }
 
-  private def getConnection(hosts: Set[InetAddress], port: Int, keyspace: Option[String] = None, system: ActorSystem): Future[ActorRef] = {
+  private def getConnection(hosts: Set[InetAddress], port: Int,
+                            keyspace: Option[String] = None, system: ActorSystem, waitForConnect: Boolean = true): Future[ActorRef] = {
     import system.dispatcher
-    for {
-      Athena.ClusterConnectorInfo(connection, _) <- IO(Athena)(system).ask(Athena.ClusterConnectorSetup(hosts, port, keyspace, None))
-    } yield {
-      connection
+    val connectTimeout = if(waitForConnect) defaultTimeoutDuration else Duration.Inf
+    val initializer = system.actorOf(Props(new ConnectorInitializer(connectTimeout)))
+    initializer.ask(Athena.ClusterConnectorSetup(hosts, port, keyspace, None)).mapTo[ActorRef]
+  }
+
+  private class ConnectorInitializer(connectTimeout: Duration) extends Actor with ActorLogging {
+
+    def receive: Receive = {
+      case x: Athena.ConnectionCreationCommand =>
+        IO(Athena)(context.system) ! x
+        val connectCommander = sender
+        context.become {
+          case Athena.CommandFailed(_) =>
+            connectCommander ! Failure(new AthenaException("Could not create connector."))
+            context.stop(self)
+
+          case evt: Athena.ConnectionCreatedEvent =>
+            log.debug("Got cluster connection actor")
+            val connector = sender
+            context.setReceiveTimeout(connectTimeout)
+            context.become {
+              case connected: Athena.ConnectedEvent =>
+                log.debug("Connector initialized - returning connector")
+                connectCommander ! connector
+                context.stop(self)
+
+              case ReceiveTimeout =>
+                log.warning("Timed out waiting for cluster to connect.")
+                connector ! Athena.Abort
+                connectCommander ! Failure(new AthenaException("Timed out waiting for cluster to connect"))
+                context.stop(self)
+            }
+
+        }
     }
   }
 
