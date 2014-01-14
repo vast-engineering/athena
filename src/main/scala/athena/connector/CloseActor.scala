@@ -10,9 +10,6 @@ import akka.actor.Terminated
  */
 private[connector] class CloseActor(connection: ActorRef, closeCmd: Athena.CloseCommand, timeout: Duration) extends Actor with ActorLogging {
 
-  //close actors should not restart - they are fire and forget, one and done
-  override def supervisorStrategy = SupervisorStrategy.stoppingStrategy
-
   context.watch(connection)
   context.setReceiveTimeout(timeout)
   connection ! closeCmd

@@ -55,7 +55,9 @@ class ConnectionActor(connectCommander: ActorRef, connect: Athena.Connect,
 
   type MyInit = Init[HasConnectionInfo, RequestEnvelope, ResponseEnvelope]
 
-  // we cannot sensibly recover from crashes
+  //Any crash kills this actor - it models a network connection,
+  //so a restart would transparently re-open that connection. That decision should be
+  //up to the client of this actor.
   override def supervisorStrategy = SupervisorStrategy.stoppingStrategy
 
   def receive = openTcpConnection()
@@ -115,18 +117,44 @@ class ConnectionActor(connectCommander: ActorRef, connect: Athena.Connect,
   private def postTcpConnect(init: MyInit, pipelineHandler: ActorRef, remoteAddress: InetSocketAddress, localAddress: InetSocketAddress) {
 
     type Behavior = PartialFunction[Any, State]
+
     sealed trait State
     case class NewState(newBehavior: Behavior) extends State
     case object Stay extends State
-    def moveTo(behavior: Behavior): State = {
-      NewState(behavior)
-    }
+
+    /**
+     * Use the supplied behavior function to define a state.
+     */
+    def state(behavior: Behavior): State = NewState(behavior)
+
+    /**
+     * Stay in the current state.
+     */
     def stay(): State = Stay
+
+    /**
+     * Immediately terminate.
+     */
     def stop(): State = {
       context.stop(self)
       Stay
     }
 
+    /**
+     * Specify the initial state that this actor should start in.
+     */
+    def startWith(state: State) {
+      state match {
+        case NewState(newBehavior) => context.become(behavior2Receive(newBehavior))
+        case _ =>
+          log.error("Invalid starting state! Shutting down.")
+          startWith(shutdown())
+      }
+    }
+
+    /**
+     * The default behavior for unhandled messages in any state.
+     */
     def defaultBehavior: Behavior = {
       case req: AthenaRequest =>
         log.warning(s"Discarding request $req due to default behavior.")
@@ -152,21 +180,13 @@ class ConnectionActor(connectCommander: ActorRef, connect: Athena.Connect,
         }
     }
 
-    def startWith(state: State) {
-      state match {
-        case NewState(newBehavior) => context.become(behavior2Receive(newBehavior))
-        case _ =>
-          log.error("Invalid starting state! Shutting down.")
-          startWith(shutdown())
-      }
-    }
 
     def shutdown(commanders: Set[ActorRef] = Set(), response: Athena.ConnectionClosed = Athena.Closed, tcpCloseCommand: Tcp.CloseCommand = Tcp.Close): State = {
 
       pipelineHandler ! TcpPipelineHandler.Management(tcpCloseCommand)
       context.setReceiveTimeout(settings.socketSettings.connectTimeout)
 
-      def step(cmdrs: Set[ActorRef]): State = moveTo {
+      def step(cmdrs: Set[ActorRef]): State = state {
         case req: AthenaRequest =>
           log.warning(s"Discarding request $req because connection is closing.")
           sender ! Responses.RequestFailed(req)
@@ -198,17 +218,33 @@ class ConnectionActor(connectCommander: ActorRef, connect: Athena.Connect,
 
 
     def initConnection(): State = {
-      pipelineHandler ! init.command(RequestEnvelope(0, CassandraRequests.Startup))
-      context.setReceiveTimeout(settings.socketSettings.readTimeout)
 
-      def setupEvents(): State = {
+      def failed(): State = {
+        connectCommander ! Athena.CommandFailed(connect)
+        shutdown()
+      }
+      
+      def sendStartup(): State = {
+        context.setReceiveTimeout(settings.socketSettings.readTimeout)
+        pipelineHandler ! init.command(RequestEnvelope(0, CassandraRequests.Startup))
+        state {
+          case init.Event(ResponseEnvelope(_, CassandraResponses.Ready)) => setupEvents()
+          case ReceiveTimeout => 
+            log.error("Timed out waiting for READY response.")
+            failed()
+        }
+      }
+      
+      def setupEvents(): State = {        
         if(connect.eventHandler.isDefined) {
           import ClusterEventName._
-          pipelineHandler ! init.command(RequestEnvelope(0, CassandraRequests.Register(Seq(TOPOLOGY_CHANGE, STATUS_CHANGE, SCHEMA_CHANGE))))
           context.setReceiveTimeout(settings.socketSettings.readTimeout)
-          moveTo {
-            case init.Event(ResponseEnvelope(_, CassandraResponses.Ready)) =>
-              setupKeyspace()
+          pipelineHandler ! init.command(RequestEnvelope(0, CassandraRequests.Register(Seq(TOPOLOGY_CHANGE, STATUS_CHANGE, SCHEMA_CHANGE))))
+          state {
+            case init.Event(ResponseEnvelope(_, CassandraResponses.Ready)) => setupKeyspace()
+            case ReceiveTimeout =>
+              log.error("Timed out waiting for READY response for event subscriptions.")
+              failed()
           }
         } else {
           setupKeyspace()
@@ -225,30 +261,32 @@ class ConnectionActor(connectCommander: ActorRef, connect: Athena.Connect,
             settings.querySettings.defaultSerialConsistencyLevel,
             None)
 
+          context.setReceiveTimeout(settings.socketSettings.readTimeout)
           pipelineHandler ! init.command(RequestEnvelope(0, setKsQuery))
-          moveTo {
+          state {
             case init.Event(ResponseEnvelope(_, CassandraResponses.KeyspaceResult(ksName))) =>
               log.debug("Successfully set keyspace to {}", ksName)
               connectionPrepared()
+            case ReceiveTimeout =>
+              log.error("Timed out while setting keyspace.")
+              failed()
           }
         }
       }
 
       def connectionPrepared(): State = {
         //server is ready to go!
-        context.setReceiveTimeout(Duration.Undefined)
-        connectCommander ! Athena.Connected(remoteAddress, localAddress)
         connectionOpen()
       }
 
-      moveTo {
-        case init.Event(ResponseEnvelope(_, CassandraResponses.Ready)) =>
-          setupEvents()
-      }
+      sendStartup()
     }
 
     //ready to take requests
     def connectionOpen(): State = {
+
+      context.setReceiveTimeout(Duration.Undefined)
+      connectCommander ! Athena.Connected(remoteAddress, localAddress)
 
       val requestTracker = new RequestMultiplexer(settings.requestTimeout)
 
@@ -281,8 +319,12 @@ class ConnectionActor(connectCommander: ActorRef, connect: Athena.Connect,
       }
 
       def connected(writesEnabled: Boolean = true, queued: List[ConnectionRequestContext] = Nil): State = {
-        log.debug("Connected - writesEnabled {}, queuedCount - {}", writesEnabled, queued.size)
-        moveTo {
+        log.debug("Connected - writesEnabled {}, openCount - {}, queuedCount - {}", writesEnabled, requestTracker.openRequestCount, queued.size)
+
+        //schedule our initial tick
+        scheduleTick()
+
+        state {
           case req: AthenaRequest =>
             val ctx = ConnectionRequestContext(req, sender)
             if(writesEnabled) {
@@ -327,18 +369,20 @@ class ConnectionActor(connectCommander: ActorRef, connect: Athena.Connect,
             queued.foreach { ctx =>
               ctx.respondTo ! RequestFailed(ctx.request)
             }
-            closing(Set(sender))
+            waitForOutstandingRequests(Set(sender))
         }
       }
 
-      def closing(closeCommanders: Set[ActorRef]): State = {
+      def waitForOutstandingRequests(closeCommanders: Set[ActorRef]): State = {
 
         def closeDone: Boolean = requestTracker.requests.isEmpty
+
+        scheduleTick()
 
         if(closeDone) {
           shutdown(closeCommanders)
         } else {
-          moveTo {
+          state {
             case req: AthenaRequest =>
               log.warning(s"Discarding request $req because the connection is closing.")
               sender ! Responses.RequestFailed(req)
@@ -368,7 +412,7 @@ class ConnectionActor(connectCommander: ActorRef, connect: Athena.Connect,
               stop()
 
             case Athena.Close =>
-              closing(closeCommanders + sender)
+              waitForOutstandingRequests(closeCommanders + sender)
 
             case Athena.Abort =>
               abort(closeCommanders + sender)
@@ -390,8 +434,6 @@ class ConnectionActor(connectCommander: ActorRef, connect: Athena.Connect,
         shutdown(commander, Athena.Aborted, Tcp.Abort)
       }
 
-      //schedule our initial tick
-      scheduleTick()
       connected()
     }
 
@@ -430,6 +472,8 @@ private[connector] object ConnectionActor {
     //Also, we're wrapping a java map since it's quite a bit faster. I hate to have to do this.
     private[this] val activeRequests: mutable.Map[Byte, ConnectionRequestContext] =
       scala.collection.JavaConversions.mapAsScalaMap(new java.util.HashMap[Byte, ConnectionRequestContext])
+
+    def openRequestCount: Int = activeRequests.size
 
     def addRequest(ctx: ConnectionRequestContext): Option[Byte] = {
       val streamId = streamIdManager.nextId()

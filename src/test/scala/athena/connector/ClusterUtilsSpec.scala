@@ -35,6 +35,7 @@ with Matchers with BeforeAndAfterAll with ClusterUtils {
       val pipeline = within(timeoutDuration) {
         IO(Athena) ! Athena.NodeConnectorSetup(host.getHostAddress, Port, Some("testks"), None)
         expectMsgType[Athena.NodeConnectorInfo]
+        expectMsgType[Athena.NodeConnected]
         Pipelining.queryPipeline(lastSender)
       }
 
@@ -42,18 +43,5 @@ with Matchers with BeforeAndAfterAll with ClusterUtils {
       log.debug("Cluster info - {}", res)
     }
   }
-
-//  "The cluster monitor actor" should {
-//    "connect to the cluster" in {
-//      val monitor = TestFSMRef(new ClusterMonitorActor(hosts, 9042, settings))
-//      monitor ! SubscribeTransitionCallBack(self)
-//      within(60 seconds) {
-//        expectMsgType[CurrentState[ClusterMonitorActor.State]]
-//        val transition = expectMsgType[Transition[ClusterMonitorActor.State]]
-//        assert(transition.to == Connected)
-//      }
-//    }
-//  }
-
 
 }

@@ -259,7 +259,7 @@ object Athena extends ExtensionKey[AthenaExt] {
 
 //  class ConnectionAttemptFailedException(val host: String, val port: Int) extends ConnectionException(s"Connection attempt to $host:$port failed")
 
-//  class NoHostAvailableException(message: String, val errors: Map[InetAddress, Any]) extends AthenaException(message)
+  class NoHostAvailableException(message: String, val errors: Map[InetAddress, Any]) extends AthenaException(message)
 
   class QueryExecutionException(message: String) extends AthenaException(message)
   class UnavailableException(message: String, val consistency: Consistency, val required: Int, val alive: Int)

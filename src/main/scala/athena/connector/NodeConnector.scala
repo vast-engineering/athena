@@ -1,18 +1,20 @@
 package athena.connector
 
 import akka.actor._
+import akka.actor.Terminated
+
+import athena.Athena._
 import athena.{NodeConnectorSettings, Responses, Athena}
 import athena.Requests.AthenaRequest
-import scala.concurrent.duration.{Duration, FiniteDuration}
-import athena.Responses.{ConnectionUnavailable, AthenaResponse}
-import java.net.{InetAddress, InetSocketAddress}
-import athena.Athena._
-import java.util.concurrent.TimeUnit
-import athena.Athena.NodeDisconnected
-import scala.Some
-import athena.Athena.NodeConnected
+import athena.Responses.AthenaResponse
 import athena.Responses.ConnectionUnavailable
-import akka.actor.Terminated
+import athena.Athena.NodeDisconnected
+import athena.Athena.NodeConnected
+
+import java.net.InetSocketAddress
+import java.util.concurrent.TimeUnit
+
+import scala.concurrent.duration.{Duration, FiniteDuration}
 
 /**
  * Manages a pool of connections to a single Cassandra node. This Actor takes incoming requests and dispatches
@@ -34,9 +36,6 @@ private[athena] class NodeConnector(commander: ActorRef,
   import context.dispatcher
 
   private[this] val counter = Iterator from 0
-
-  // we cannot sensibly recover from crashes
-  override def supervisorStrategy = SupervisorStrategy.stoppingStrategy
 
   private val defaultBehavior: Receive = {
     case req: AthenaRequest =>

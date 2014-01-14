@@ -5,7 +5,7 @@ import scala.concurrent.{ExecutionContext, Future}
 import athena.Responses._
 import akka.actor.ActorRef
 import akka.util.Timeout
-import athena.Athena.{InternalException, AthenaException, QueryTimeoutException}
+import athena.Athena.{NoHostAvailableException, InternalException, AthenaException, QueryTimeoutException}
 import akka.pattern._
 import play.api.libs.iteratee.{Enumeratee, Enumerator}
 import athena.Responses.Timedout
@@ -24,16 +24,21 @@ object Pipelining {
   def pipeline(connection: ActorRef)(implicit log: LoggingContext, ec: ExecutionContext, timeout: Timeout): AthenaRequest => Future[AthenaResponse] = {
     request =>
       connection.ask(request).map {
+        case ConnectionUnavailable(_, errors) =>
+          throw new NoHostAvailableException("No hosts available for request.", errors)
+
         case t: Timedout =>
           throw new QueryTimeoutException("Query execution timed out.")
+
+        case resp: AthenaResponse if resp.isFailure =>
+          throw new AthenaException(s"Request failed - $resp")
+
         case ErrorResponse(_, error) =>
           throw error.toThrowable
+          
         case resp: AthenaResponse =>
-          if(resp.isFailure) {
-            throw new AthenaException(s"Request failed for unknown reason - $resp")
-          } else {
-            resp
-          }
+          resp
+
         case x =>
           log.error("Unknown response to query {} - {}", request, x)
           throw new InternalException(s"Unknown response to query $request - $x")
@@ -72,15 +77,9 @@ object Pipelining {
     queryPipeline(pipeline(connection))
   }
 
-  private def rowEnumeratee(implicit ec: ExecutionContext): Enumeratee[Rows, Row] = Enumeratee.mapConcat { rows =>
-    rows.data.map { rowData =>
-      Row(rows.columnDefs, rowData)
-    }
-  }
-
   private def rowsEnumerator(pipeline: Pipeline)(implicit ec: ExecutionContext, log: LoggingContext): Statement => Enumerator[Row] = {
     stmt =>
-      val enum = Enumerator.unfoldM[Option[Query], Rows](Some(stmt)) { q =>
+      Enumerator.unfoldM[Option[Query], Rows](Some(stmt)) { q =>
         if(q.isEmpty) {
           Future.successful(None)
         } else {
@@ -96,8 +95,11 @@ object Pipelining {
               throw new InternalException(s"Expected Rows back from a query, got $x instead.")
           }
         }
+      } through {
+        //this bit transforms from an Enumerator[Rows] to an Enumerator[Row]
+        //The construct below uses an Enumeratee[Rows, Row] to do this
+        Enumeratee.mapConcat(rows => rows.data.map(Row(rows.columnDefs, _)))
       }
-      enum.through(rowEnumeratee)
   }
 
 }

@@ -301,7 +301,7 @@ private[athena] object ClusterConnector {
     def attemptRequest() {
       if(!plan.hasNext) {
         //out of options here,
-        respondTo ! ConnectionUnavailable(req)
+        respondTo ! ConnectionUnavailable(req, errors)
         context.stop(self)
       } else {
         val host = plan.next()

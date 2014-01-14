@@ -3,6 +3,9 @@ package athena
 import akka.util.ByteString
 import athena.Requests.{AthenaRequest, Statement}
 import athena.data.ColumnDef
+import scala.Predef._
+import athena.data.ColumnDef
+import java.net.InetAddress
 
 
 object Responses {
@@ -29,7 +32,7 @@ object Responses {
   /**
    * Signals that a request could not be sent due to a connection problem
    */
-  case class ConnectionUnavailable(request: AthenaRequest) extends FailureResponse
+  case class ConnectionUnavailable(request: AthenaRequest, errors: Map[InetAddress, Any] = Map.empty) extends FailureResponse
 
   sealed abstract class SuccessfulResponse extends AthenaResponse {
     def isFailure: Boolean = false

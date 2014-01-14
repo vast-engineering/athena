@@ -10,6 +10,7 @@ import athena.connector.ClusterInfo.ClusterMetadata
 import scala.language.postfixOps
 
 import athena.TestData._
+import athena.connector.ClusterMonitorActor.ClusterReconnected
 
 class ClusterMonitorSpec extends TestKit(ActorSystem("test")) with WordSpecLike
 with DefaultTimeout with ImplicitSender
@@ -29,6 +30,7 @@ with Matchers with BeforeAndAfterAll with TestLogging {
     "connect to the cluster" in {
       TestActorRef(new ClusterMonitorActor(self, Hosts, Port, settings))
       within(60 seconds) {
+        expectMsg(ClusterReconnected)
         expectMsgType[ClusterMetadata]
       }
     }

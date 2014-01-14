@@ -1,24 +1,26 @@
 package athena.client
 
-import athena.{SerialConsistency, Consistency, Athena, ClusterConnectorSettings}
 import akka.actor._
-
 import akka.io.IO
 import akka.pattern._
 import akka.util.{Timeout, ByteString}
-import java.util.concurrent.TimeUnit
-import scala.concurrent.duration.Duration
-import java.net.InetAddress
+import akka.actor.Status.Failure
+import akka.event.{Logging, LoggingAdapter}
+
+import athena.{SerialConsistency, Consistency, Athena}
+
 import play.api.libs.iteratee.Enumerator
-import scala.concurrent.{ExecutionContext, Future}
+
 import athena.data.CValue
 import athena.Consistency.Consistency
 import athena.SerialConsistency.SerialConsistency
-import akka.event.{Logging, LoggingAdapter}
 import athena.Athena.AthenaException
-import akka.actor.Status.Failure
-import scala.Some
 import athena.Requests.SimpleStatement
+
+import java.util.concurrent.TimeUnit
+import java.net.InetAddress
+import scala.concurrent.duration.{FiniteDuration, Duration}
+import scala.concurrent.{ExecutionContext, Future}
 
 trait Session {
 
@@ -48,7 +50,7 @@ trait Session {
 
 object Session {
 
-  private val defaultTimeoutDuration = Duration(5, TimeUnit.SECONDS)
+  private val defaultTimeoutDuration = FiniteDuration(5, TimeUnit.SECONDS)
   private implicit val defaultTimeout = Timeout(defaultTimeoutDuration)
   private implicit def getLogger(implicit system: ActorSystem): LoggingAdapter = Logging.getLogger(system, classOf[Session])
 
@@ -98,7 +100,7 @@ object Session {
               case ReceiveTimeout =>
                 log.warning("Timed out waiting for cluster to connect.")
                 connector ! Athena.Abort
-                connectCommander ! Failure(new AthenaException("Timed out waiting for cluster to connect"))
+                connectCommander ! Failure(new AthenaException("Timed out waiting for cluster to connect."))
                 context.stop(self)
             }
 
