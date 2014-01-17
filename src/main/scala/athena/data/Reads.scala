@@ -9,6 +9,9 @@ import java.util.{UUID, Date}
 import java.math.BigInteger
 import java.net.{InetSocketAddress, InetAddress}
 import scala.reflect.ClassTag
+import play.api.libs.json.{Json, JsValue}
+import scala.util.control.NonFatal
+import com.fasterxml.jackson.core.JsonParseException
 
 /**
  * A trait that defines a class that can convert from a cassandra value to another type A.
@@ -83,9 +86,11 @@ trait DefaultReads {
   import scala.reflect.runtime.universe._
   def nonNull[T](r: PartialFunction[CValue, CvResult[T]])(implicit t: TypeTag[T]): Reads[T] = {
     new Reads[T] {
-      def reads(cvalue: CValue): CvResult[T] = cvalue match {
-        case CNull => CvError(s"Cannot convert null value to type ${t.tpe.toString}.")
-        case x => if(r.isDefinedAt(x)) r(x) else CvError("Cannot convert value to to type ${t.tpe.toString}.")
+      def reads(cvalue: CValue): CvResult[T] = {
+        cvalue match {
+          case CNull => CvError(s"Cannot convert null value to type ${t.tpe.toString}.")
+          case x => if(r.isDefinedAt(x)) r(x) else CvError("Cannot convert value to to type ${t.tpe.toString}.")
+        }
       }
     }
   }
@@ -158,6 +163,30 @@ trait DefaultReads {
 
   implicit val InetAddressReads: Reads[InetAddress] = nonNull {
     case CInetAddress(address) => CvSuccess(address)
+  }
+
+  implicit val JsValueReads: Reads[JsValue] = {
+
+    nonNull {
+      case CASCIIString(data) =>
+        try {
+          CvSuccess(Json.parse(data))
+        } catch {
+          case e: JsonParseException => CvError(s"Could not parse value as JSON - ${e.getMessage}")
+        }
+      case CVarChar(data) =>
+        try {
+          CvSuccess(Json.parse(data))
+        } catch {
+          case e: JsonParseException => CvError(s"Could not parse value as JSON - ${e.getMessage}")
+        }
+      case CBlob(bytes) =>
+        try {
+          CvSuccess(Json.parse(bytes.toArray))
+        } catch {
+          case e: JsonParseException => CvError(s"Could not parse value as JSON - ${e.getMessage}")
+        }
+    }
   }
 
   implicit def mapReads[A, B](implicit keyReads: Reads[A], valueReads: Reads[B], a: TypeTag[A], b: TypeTag[B]): Reads[Map[A, B]] = reads {
