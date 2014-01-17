@@ -104,7 +104,7 @@ class ConnectionActor(connectCommander: ActorRef, connect: Athena.Connect,
         context.stop(self)
 
       case ReceiveTimeout ⇒
-        log.warning("Configured connecting timeout of {} expired, stopping", settings.socketSettings.connectTimeout)
+        log.warning("Connection to {} timed out.", connect.remoteAddress)
         connectCommander ! Athena.CommandFailed(connect)
         context.stop(self)
     }

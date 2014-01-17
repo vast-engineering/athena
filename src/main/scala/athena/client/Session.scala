@@ -14,7 +14,7 @@ import play.api.libs.iteratee.Enumerator
 import athena.data.CValue
 import athena.Consistency.Consistency
 import athena.SerialConsistency.SerialConsistency
-import athena.Athena.AthenaException
+import athena.Athena.{ClusterConnectorInfo, AthenaException}
 import athena.Requests.SimpleStatement
 
 import java.util.concurrent.TimeUnit
@@ -57,9 +57,9 @@ object Session {
   /**
    * Create a session using an existing ActorSystem
    */
-  def apply(initialHosts: Set[InetAddress], port: Int, keyspace: Option[String] = None)(implicit system: ActorSystem): Session = {
+  def apply(initialHosts: Set[InetAddress], port: Int, keyspace: Option[String] = None, waitForConnection: Boolean = true)(implicit system: ActorSystem): Session = {
     import system.dispatcher
-    val connection = getConnection(initialHosts, port, keyspace, system)
+    val connection = getConnection(initialHosts, port, keyspace, system, waitForConnection)
     new SimpleSession(connection) {
       def close(): Unit = {
         //shutdown our actor
@@ -72,8 +72,9 @@ object Session {
                             keyspace: Option[String] = None, system: ActorSystem, waitForConnect: Boolean = true): Future[ActorRef] = {
     import system.dispatcher
     val connectTimeout = if(waitForConnect) defaultTimeoutDuration else Duration.Inf
+    val setup = Athena.ClusterConnectorSetup(hosts, port, keyspace, None)
     val initializer = system.actorOf(Props(new ConnectorInitializer(connectTimeout)))
-    initializer.ask(Athena.ClusterConnectorSetup(hosts, port, keyspace, None)).mapTo[ActorRef]
+    initializer.ask(setup).mapTo[ActorRef]
   }
 
   private class ConnectorInitializer(connectTimeout: Duration) extends Actor with ActorLogging {

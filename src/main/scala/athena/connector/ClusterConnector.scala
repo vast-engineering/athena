@@ -71,6 +71,9 @@ private[athena] class ClusterConnector(commander: ActorRef, //this actor will be
 
   }
 
+  override def postStop(): Unit = {
+    log.info("Cluster connector to {} shutting down.", clusterMetadata.name.getOrElse("Unknown"))
+  }
 
   def receive = starting()
 

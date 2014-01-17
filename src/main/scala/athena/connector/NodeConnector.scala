@@ -80,7 +80,8 @@ private[athena] class NodeConnector(commander: ActorRef,
         close(Set(connection), cmd, Set(sender))
 
       case ReceiveTimeout =>
-        log.error("Timed out waiting for core connection to host {}.", remoteAddress.getAddress)
+        log.debug("Timed out waiting for core connection to host {} in connecting state.", remoteAddress.getAddress)
+        closeConnection(connection)
         reconnecting(retryCount + 1)
     } 
     
