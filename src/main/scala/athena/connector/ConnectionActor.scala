@@ -15,7 +15,7 @@ import athena.connector.pipeline.ResponseEnvelope
 import java.nio.ByteOrder
 import java.net.InetSocketAddress
 
-import scala.concurrent.duration.{Duration, DurationInt}
+import scala.concurrent.duration.{FiniteDuration, Duration, DurationInt}
 import scala.collection.mutable
 
 import scala.language.postfixOps
@@ -64,8 +64,14 @@ class ConnectionActor(connectCommander: ActorRef, connect: Athena.Connect,
 
   private def openTcpConnection(): Receive = {
 
+    val to = settings.socketSettings.connectTimeout
     context.setReceiveTimeout(settings.socketSettings.connectTimeout)
-    IO(Tcp) ! Tcp.Connect(connect.remoteAddress)
+    val tcpTimeout = if(to.isFinite()) {
+      Some(FiniteDuration(to.length, to.unit))
+    } else {
+      None
+    }
+    IO(Tcp) ! Tcp.Connect(connect.remoteAddress, timeout = tcpTimeout)
 
     {
       case connected@Tcp.Connected(remote, local) ⇒

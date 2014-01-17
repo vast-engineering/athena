@@ -31,7 +31,7 @@ private[athena] class ClusterConnector(commander: ActorRef, //this actor will be
   import context.dispatcher
 
   //create and sign a death pact with the monitor - we need it to operate
-  context.watch {
+  private[this] val clusterMonitor = context.watch {
     context.actorOf(
       props = Props(new ClusterMonitorActor(self, initialHosts, port, settings)),
       name = "cluster-monitor"
@@ -132,7 +132,9 @@ private[athena] class ClusterConnector(commander: ActorRef, //this actor will be
       case NodeConnected(addr) =>
         hostUp(addr)
 
-      case NodeDisconnected(addr) =>
+      case x@NodeDisconnected(addr) =>
+        //let the monitor know - in case it hasn't disconnected yet
+        clusterMonitor ! x
         hostDown(addr)
 
       case HostStatusChanged(addr, isUp) =>

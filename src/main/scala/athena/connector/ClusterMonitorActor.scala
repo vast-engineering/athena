@@ -20,6 +20,7 @@ import scala.Some
 import akka.actor.Terminated
 import athena.connector.ClusterInfo.ClusterMetadata
 import athena.connector.ClusterConnector.HostStatusChanged
+import athena.Athena.NodeDisconnected
 
 private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set[InetAddress], port: Int, settings: ClusterConnectorSettings)
   extends Actor with ActorLogging with ClusterUtils {
@@ -104,12 +105,6 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
     context.watch(connection)
     val pipeline = Pipelining.queryPipeline(connection)
 
-    def scheduleHeartbeat() {
-      context.system.scheduler.scheduleOnce(Duration(10, TimeUnit.SECONDS)) {
-        self ! 'heartbeat
-      }
-    }
-
     def whileConnected(hosts: Map[InetAddress, HostInfo]): Receive = {
       case info: ClusterMetadata =>
         log.debug("Cluster metadata received.")
@@ -125,13 +120,14 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
         context.actorOf(CloseActor.props(connection, Athena.Close, settings.localNodeSettings.closeTimeout))
         context.become(reconnect(hosts))
 
-      case 'heartbeat =>
-        // TODO - check to see if the server is still alive
-        scheduleHeartbeat()
-
       case Terminated(`connection`) =>
         log.warning("Connection to {} closed. Trying next host.", connectedHost)
         context.become(reconnect(hosts, false))
+
+      case NodeDisconnected(addr) if addr == connectedHost.addr =>
+        context.unwatch(connection)
+        context.actorOf(CloseActor.props(connection, Athena.Close, settings.localNodeSettings.closeTimeout))
+        context.become(reconnect(hosts))
 
       case evt: ClusterEvent =>
         log.debug("Got cluster event {}", evt)
