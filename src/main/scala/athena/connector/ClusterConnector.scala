@@ -20,11 +20,11 @@ import athena.Responses.Timedout
 import athena.connector.ClusterInfo.ClusterMetadata
 import java.util.concurrent.TimeUnit
 
-private[athena] class ClusterConnector(commander: ActorRef, //this actor will be sent status messages
-                                       initialHosts: Set[InetAddress],
-                                       port: Int,
-                                       keyspace: Option[String],
-                                       settings: ClusterConnectorSettings) extends Actor with ActorLogging {
+class ClusterConnector(commander: ActorRef,
+                       initialHosts: Set[InetAddress],
+                       port: Int,
+                       keyspace: Option[String],
+                       settings: ClusterConnectorSettings) extends Actor with ActorLogging {
 
   import ClusterConnector._
 
@@ -275,7 +275,7 @@ private[athena] class ClusterConnector(commander: ActorRef, //this actor will be
 
 }
 
-private[athena] object ClusterConnector {
+object ClusterConnector {
 
   def props(commander: ActorRef,
             initialHosts: Set[InetAddress],
@@ -345,7 +345,7 @@ private[athena] object ClusterConnector {
     }
   }
 
-  object RequestActor {
+  private object RequestActor {
     def props(req: AthenaRequest, respondTo: ActorRef, plan: Iterator[ConnectedHost], timeout: Duration) =
       Props(new RequestActor(req, respondTo, plan, timeout))
   }

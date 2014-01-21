@@ -16,6 +16,9 @@ import akka.dispatch.ForkJoinExecutorConfigurator.AkkaForkJoinTask
 object Pipelining {
   type Pipeline = AthenaRequest => Future[AthenaResponse]
 
+  type QueryPipeline = Statement => Enumerator[Row]
+  type UpdatePipeline = Statement => Future[Unit]
+
   def pipeline(connection: Future[ActorRef])(implicit log: LoggingContext, ec: ExecutionContext, timeout: Timeout): AthenaRequest => Future[AthenaResponse] = {
     val pipeF = connection.map(pipeline)
     request => pipeF.flatMap(pipe => pipe(request))
@@ -61,6 +64,10 @@ object Pipelining {
         case x =>
           throw new InternalException(s"Expected Successful back from an update, got $x instead.")
       }
+  }
+
+  def updatePipeline(connection: ActorRef)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Future[Unit] = {
+    updatePipeline(pipeline(connection))
   }
 
   /**
