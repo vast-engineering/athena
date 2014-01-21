@@ -64,8 +64,8 @@ trait DefaultWrites {
     })
   }
 
-  implicit def listWrites[A](implicit a: Writes[A]): Writes[List[A]] = new Writes[List[A]] {
-    def writes(value: List[A]): CValue = CList(value.map(CValue(_)))
+  implicit def seqWrites[A](implicit a: Writes[A]): Writes[Seq[A]] = new Writes[Seq[A]] {
+    def writes(value: Seq[A]): CValue = CList(value.map(CValue(_)))
   }
 
   implicit def setWrites[A](implicit a: Writes[A]): Writes[Set[A]] = new Writes[Set[A]] {
