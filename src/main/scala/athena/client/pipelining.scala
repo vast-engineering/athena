@@ -19,7 +19,8 @@ object Pipelining {
   type QueryPipeline = Statement => Enumerator[Row]
   type UpdatePipeline = Statement => Future[Unit]
 
-  def pipeline(connection: Future[ActorRef])(implicit log: LoggingContext, ec: ExecutionContext, timeout: Timeout): AthenaRequest => Future[AthenaResponse] = {
+  def pipeline(connection: Future[ActorRef])
+              (implicit log: LoggingContext, ec: ExecutionContext, timeout: Timeout): AthenaRequest => Future[AthenaResponse] = {
     val pipeF = connection.map(pipeline)
     request => pipeF.flatMap(pipe => pipe(request))
   }

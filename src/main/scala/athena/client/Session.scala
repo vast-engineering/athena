@@ -21,6 +21,8 @@ import java.util.concurrent.TimeUnit
 import java.net.InetAddress
 import scala.concurrent.duration.{FiniteDuration, Duration}
 import scala.concurrent.{ExecutionContext, Future}
+import spray.util.LoggingContext
+import athena.client.Pipelining.Pipeline
 
 trait Session {
 
@@ -52,15 +54,29 @@ object Session {
 
   private val defaultTimeoutDuration = FiniteDuration(5, TimeUnit.SECONDS)
   private implicit val defaultTimeout = Timeout(defaultTimeoutDuration)
-  private implicit def getLogger(implicit system: ActorSystem): LoggingAdapter = Logging.getLogger(system, classOf[Session])
+ //private implicit def getLogger(implicit actorRefFactory: ActorSystem): LoggingAdapter = Logging.getLogger(actorRefFactory, classOf[Session])
+
+  def apply(connection: ActorRef)
+           (implicit log: LoggingContext, ec: ExecutionContext): Session = {
+    new SimpleSession(Pipelining.pipeline(connection)) {
+      /**
+       * This method must be called to properly dispose of the Session.
+       */
+      override def close() {
+        //do nothing
+      }
+    }
+  }
 
   /**
    * Create a session using an existing ActorSystem
    */
-  def apply(initialHosts: Set[InetAddress], port: Int, keyspace: Option[String] = None, waitForConnection: Boolean = true)(implicit system: ActorSystem): Session = {
+  def apply(initialHosts: Set[InetAddress], port: Int, keyspace: Option[String] = None, 
+            waitForConnection: Boolean = true)(implicit system: ActorRefFactory): Session = {
     import system.dispatcher
     val connection = getConnection(initialHosts, port, keyspace, system, waitForConnection)
-    new SimpleSession(connection) {
+    val pipe = Pipelining.pipeline(connection)
+    new SimpleSession(pipe) {
       def close(): Unit = {
         //shutdown our actor
         connection.foreach(system.stop)
@@ -69,11 +85,12 @@ object Session {
   }
 
   private def getConnection(hosts: Set[InetAddress], port: Int,
-                            keyspace: Option[String] = None, system: ActorSystem, waitForConnect: Boolean = true): Future[ActorRef] = {
-    import system.dispatcher
+                            keyspace: Option[String] = None, actorRefFactory: ActorRefFactory,
+                            waitForConnect: Boolean = true): Future[ActorRef] = {
+    import actorRefFactory.dispatcher
     val connectTimeout = if(waitForConnect) defaultTimeoutDuration else Duration.Inf
     val setup = Athena.ClusterConnectorSetup(hosts, port, keyspace, None)
-    val initializer = system.actorOf(Props(new ConnectorInitializer(connectTimeout)))
+    val initializer = actorRefFactory.actorOf(Props(new ConnectorInitializer(connectTimeout)))
     initializer.ask(setup).mapTo[ActorRef]
   }
 
@@ -109,9 +126,9 @@ object Session {
     }
   }
 
-  private abstract class SimpleSession(connection: Future[ActorRef])(implicit log: LoggingAdapter, ec: ExecutionContext) extends Session {
+  private abstract class SimpleSession(pipeline: Pipeline)
+                              (implicit log: LoggingContext, ec: ExecutionContext) extends Session {
 
-    private[this] val pipeline = Pipelining.pipeline(connection)
     private[this] val queryPipeline = Pipelining.queryPipeline(pipeline)
     private[this] val updatePipeline = Pipelining.updatePipeline(pipeline)
 
