@@ -6,11 +6,9 @@ import athena.util.ByteStringUtils._
 import java.nio.ByteOrder
 import org.joda.time.DateTime
 import java.util.{UUID, Date}
-import java.math.BigInteger
-import java.net.{InetSocketAddress, InetAddress}
-import scala.reflect.ClassTag
-import play.api.libs.json.{Json, JsValue}
-import scala.util.control.NonFatal
+import java.net.InetAddress
+
+import play.api.libs.json.{Reads => JsonReads, JsError, JsSuccess, Json, JsValue}
 import com.fasterxml.jackson.core.JsonParseException
 
 /**
@@ -64,10 +62,27 @@ trait Reads[A] {
 
 }
 
-object Reads extends DefaultReads {
+object Reads extends DefaultReads with MetaReaders {
   def apply[A](f: CValue => CvResult[A]): Reads[A] = new Reads[A] {
     def reads(value: CValue) = f(value)
   }
+}
+
+trait MetaReaders {
+
+  def jsonReads[T](implicit jsReader: JsonReads[T]): Reads[T] = Reads[T] { cvalue =>
+    cvalue.validate[JsValue].flatMap { jsValue =>
+      jsReader.reads(jsValue) match {
+        case JsSuccess(obj, _) => CvSuccess(obj)
+        case JsError(errors) =>
+          val cErrors = errors.map { error =>
+            s"${error._1} -> ${error._2.mkString(", ")}"
+          }
+          CvError(cErrors)
+      }
+    }
+  }
+
 }
 
 trait DefaultReads {

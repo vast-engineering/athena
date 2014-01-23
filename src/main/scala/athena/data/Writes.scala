@@ -3,7 +3,7 @@ package athena.data
 import scala.annotation.implicitNotFound
 import org.joda.time.DateTime
 import java.util.{UUID, Date}
-import play.api.libs.json.{JsValue, Json}
+import play.api.libs.json.{JsValue, Json, Writes => JsonWrites}
 
 /**
  * Cassandra serializer: write an implicit to define a marshaller for any type.
@@ -76,6 +76,7 @@ trait DefaultWrites {
     def writes(value: Option[A]): CValue = value.map(CValue(_)).getOrElse(CNull)
   }
 
+  def jsonWrites[T](implicit jsWrites: JsonWrites[T]): Writes[T] = Writes[T](t => CValue.toValue(jsWrites.writes(t)))
 
 
 }
