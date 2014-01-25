@@ -27,7 +27,8 @@ import athena.client.Pipelining.Pipeline
 trait Session {
 
   /**
-   * Execute a query and return an asynchronous stream of result rows.
+   * Execute a query and return an asynchronous stream of result rows. Note, this method will 
+   * defer actual execution of the query until the Enumerator has an Iteratee attached to it.
    */
   def executeQuery(query: String,
                    values: Seq[CValue] = Seq(),
@@ -36,12 +37,19 @@ trait Session {
                    consistency: Consistency = Consistency.ONE,
                    serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Enumerator[Row]
 
+  /**
+   * Execute a query intended to update data. As opposed to the method above, this method 
+   * executes the query immediately. This also aggregates any and all result rows into memory. This 
+   * avoids the need to stream rows, but be aware that if the query returns a large row count, they will
+   * all be buffered in memory.
+   */
+  //TODO: This method needs a better name.
   def executeUpdate(query: String,
                    values: Seq[CValue] = Seq(),
                    keyspace: Option[String] = None,
                    routingKey: Option[ByteString] = None,
                    consistency: Consistency = Consistency.ONE,
-                   serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Future[Unit]
+                   serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Future[Seq[Row]]
 
 
   /**
@@ -146,7 +154,7 @@ object Session {
                       keyspace: Option[String] = None,
                       routingKey: Option[ByteString] = None,
                       consistency: Consistency = Consistency.ONE,
-                      serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Future[Unit] = {
+                      serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Future[Seq[Row]] = {
       updatePipeline(SimpleStatement(query, values, keyspace, routingKey, Some(consistency), Some(serialConsistency)))
     }
 

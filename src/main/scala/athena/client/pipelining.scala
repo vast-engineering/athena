@@ -7,7 +7,7 @@ import akka.actor.ActorRef
 import akka.util.Timeout
 import athena.Athena.{NoHostAvailableException, InternalException, AthenaException, QueryTimeoutException}
 import akka.pattern._
-import play.api.libs.iteratee.{Enumeratee, Enumerator}
+import play.api.libs.iteratee.{Iteratee, Enumeratee, Enumerator}
 import athena.Responses.Timedout
 import athena.Responses.ErrorResponse
 import spray.util.LoggingContext
@@ -17,7 +17,7 @@ object Pipelining {
   type Pipeline = AthenaRequest => Future[AthenaResponse]
 
   type QueryPipeline = Statement => Enumerator[Row]
-  type UpdatePipeline = Statement => Future[Unit]
+  type UpdatePipeline = Statement => Future[Seq[Row]]
 
   def pipeline(connection: Future[ActorRef])
               (implicit log: LoggingContext, ec: ExecutionContext, timeout: Timeout): AthenaRequest => Future[AthenaResponse] = {
@@ -52,22 +52,13 @@ object Pipelining {
       }
   }
 
-  def updatePipeline(pipeline: Pipeline)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Future[Unit] = {
+  def updatePipeline(pipeline: Pipeline)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Future[Seq[Row]] = {
+    val underlying = queryPipeline(pipeline)
     stmt =>
-      pipeline(stmt).map {
-        case s: Successful =>
-          //everything went as planned
-          ()
-        case r: Rows =>
-          log.warning("Got rows back from update query.")
-          //just ignore them
-          ()
-        case x =>
-          throw new InternalException(s"Expected Successful back from an update, got $x instead.")
-      }
+      underlying(stmt).run(Iteratee.getChunks)
   }
 
-  def updatePipeline(connection: ActorRef)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Future[Unit] = {
+  def updatePipeline(connection: ActorRef)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Future[Seq[Row]] = {
     updatePipeline(pipeline(connection))
   }
 
@@ -96,8 +87,7 @@ object Pipelining {
               val nextQ = pagingState.map(ps => FetchRows(stmt, ps))
               Some(nextQ, rows)
             case s: Successful =>
-              //shouldn't really get this, but it's not technically an error
-              log.warning("Expected rows from query, got empty Successful response instead.")
+              //The query had no rows - just end the enumerator
               None
             case x =>
               throw new InternalException(s"Expected Rows back from a query, got $x instead.")
