@@ -1,17 +1,17 @@
 package athena.client
 
-import athena.Requests.{FetchRows, Query, Statement, AthenaRequest}
+import athena.Requests.{FetchRows, Statement, AthenaRequest}
 import scala.concurrent.{ExecutionContext, Future}
 import athena.Responses._
 import akka.actor.ActorRef
-import akka.util.Timeout
+import akka.util.{ByteString, Timeout}
 import athena.Athena.{NoHostAvailableException, InternalException, AthenaException, QueryTimeoutException}
 import akka.pattern._
-import play.api.libs.iteratee.{Iteratee, Enumeratee, Enumerator}
+import play.api.libs.iteratee.{Enumeratee, Enumerator}
 import athena.Responses.Timedout
 import athena.Responses.ErrorResponse
 import spray.util.LoggingContext
-import akka.dispatch.ForkJoinExecutorConfigurator.AkkaForkJoinTask
+import scala.collection.mutable.Builder
 
 object Pipelining {
   type Pipeline = AthenaRequest => Future[AthenaResponse]
@@ -53,9 +53,30 @@ object Pipelining {
   }
 
   def updatePipeline(pipeline: Pipeline)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Future[Seq[Row]] = {
-    val underlying = queryPipeline(pipeline)
-    stmt =>
-      underlying(stmt).run(Iteratee.getChunks)
+    stmt => {
+      def collectRows(acc: Builder[Row, Seq[Row]], meta: Option[ResultSetMetadata], ps: Option[ByteString]): Future[Seq[Row]] = {
+        getRows(pipeline, stmt, ps).flatMap { rowsOpt =>
+          rowsOpt.map { rows =>
+            val metadata = meta.getOrElse(ResultSetMetadata(rows))
+            rows.data.foreach { rowData =>
+              acc += Row(metadata, rowData)
+            }
+            if(rows.pagingState.isEmpty) {
+              //this means we've exhausted the results
+              Future.successful(acc.result())
+            } else {
+              //we need to fetch more rows
+              collectRows(acc, Some(metadata), rows.pagingState)
+            }
+          } getOrElse {
+            //this means the query returned no rows - we can just return the current rows
+            Future.successful(acc.result())
+          }
+        }
+      }
+
+      collectRows(Seq.newBuilder, None, None)
+    }
   }
 
   def updatePipeline(connection: ActorRef)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Future[Seq[Row]] = {
@@ -66,38 +87,58 @@ object Pipelining {
    * Create a new pipeline that has the ability to asynchronously execute a Statement and
    * return an Enumerator of the resulting rows.
    */
-  def queryPipeline(pipeline: Pipeline)(implicit ec: ExecutionContext, timeout: Timeout): Statement => Enumerator[Row] = {
+  def queryPipeline(pipeline: Pipeline)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Enumerator[Row] = {
     val rowsEnum = rowsEnumerator(pipeline)
 
     stmt => rowsEnum(stmt)
   }
 
-  def queryPipeline(connection: ActorRef)(implicit ec: ExecutionContext, timeout: Timeout): Statement => Enumerator[Row] = {
+  def queryPipeline(connection: ActorRef)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Enumerator[Row] = {
     queryPipeline(pipeline(connection))
   }
 
+  private case class EnumeratorState(pageInfo: Option[ByteString] = None, metadata: Option[ResultSetMetadata] = None, beforeFirstPage: Boolean = true)
+  private case class ResultPage(metadata: ResultSetMetadata, data: Seq[IndexedSeq[ByteString]])
+
   private def rowsEnumerator(pipeline: Pipeline)(implicit ec: ExecutionContext, log: LoggingContext): Statement => Enumerator[Row] = {
     stmt =>
-      Enumerator.unfoldM[Option[Query], Rows](Some(stmt)) { q =>
-        if(q.isEmpty) {
+
+      Enumerator.unfoldM[EnumeratorState, ResultPage](EnumeratorState()) { state =>
+        if(!state.beforeFirstPage && state.pageInfo.isEmpty) {
+          //this means that we've fetched pages and there are no more pages to fetch
           Future.successful(None)
         } else {
-          pipeline(q.get).map {
-            case rows@Rows(_, _, _, pagingState) =>
-              val nextQ = pagingState.map(ps => FetchRows(stmt, ps))
-              Some(nextQ, rows)
-            case s: Successful =>
-              //The query had no rows - just end the enumerator
-              None
-            case x =>
-              throw new InternalException(s"Expected Rows back from a query, got $x instead.")
+          getRows(pipeline, stmt, state.pageInfo).map { rowsOpt =>
+            //optimization - if there are no rows in the page, then don't return anything
+            rowsOpt.filter(!_.data.isEmpty).map { rows =>
+            //only create the metadata once - it will be the same for every page
+              val pageMetadata = state.metadata.getOrElse(ResultSetMetadata(rows))
+              val nextState = EnumeratorState(rows.pagingState, Some(pageMetadata), beforeFirstPage = false)
+              val resultPage = ResultPage(pageMetadata, rows.data)
+              (nextState, resultPage)
+            }
           }
         }
       } through {
-        //this bit transforms from an Enumerator[Rows] to an Enumerator[Row]
-        //The construct below uses an Enumeratee[Rows, Row] to do this
-        Enumeratee.mapConcat(rows => rows.data.map(Row(rows.columnDefs, _)))
-      }
+        //this bit transforms from an Enumerator[ResultPage] to an Enumerator[Row]
+        Enumeratee.mapConcat[ResultPage] { page =>
+          val meta = page.metadata
+          page.data.map(data => Row(meta, data))
+        }
+      } andThen Enumerator.eof
   }
+
+  private def getRows(pipeline: Pipeline, stmt: Statement, ps: Option[ByteString])(implicit ec: ExecutionContext, log: LoggingContext): Future[Option[Rows]] = {
+    val query = ps.map(FetchRows(stmt, _)).getOrElse(stmt)
+    pipeline(query).map {
+      case rows: Rows => Some(rows)
+      case s: Successful =>
+        //The query had no rows - just end the enumerator
+        None
+      case x =>
+        throw new InternalException(s"Expected Rows back from a query, got $x instead.")
+    }
+  }
+
 
 }

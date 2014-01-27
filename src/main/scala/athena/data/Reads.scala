@@ -10,6 +10,7 @@ import java.net.InetAddress
 
 import play.api.libs.json.{Reads => JsonReads, JsError, JsSuccess, Json, JsValue}
 import com.fasterxml.jackson.core.JsonParseException
+import scala.reflect.ClassTag
 
 /**
  * A trait that defines a class that can convert from a cassandra value to another type A.
@@ -85,11 +86,19 @@ trait MetaReaders {
 
 }
 
+//trait ConstraintReads {
+//  implicit def ofValue[A <: CValue](implicit ct: ClassTag[A]): Reads[A] = Reads[A] {
+//    case x: A => CvSuccess(x)
+//    case x => CvError(s"expected value of type ${ct.runtimeClass.getName}")
+//  }
+//
+//}
+
 trait DefaultReads {
 
-  implicit object CValueReads extends Reads[CValue] {
-    def reads(cvalue: CValue): CvResult[CValue] = CvSuccess(cvalue)
-  }
+//  implicit object CValueReads extends Reads[CValue] {
+//    def reads(cvalue: CValue): CvResult[CValue] = CvSuccess(cvalue)
+//  }
 
   implicit def optionReads[T](implicit rt: Reads[T]): Reads[Option[T]] = new Reads[Option[T]] {
       def reads(cvalue: CValue): CvResult[Option[T]] = cvalue match {

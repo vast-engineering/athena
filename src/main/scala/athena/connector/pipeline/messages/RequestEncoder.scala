@@ -8,8 +8,9 @@ import athena.data._
 import athena.connector.CassandraRequests._
 import athena.util.ByteStringUtils
 import athena.Consistency
+import com.typesafe.scalalogging.slf4j.Logging
 
-private[connector] object RequestEncoder {
+private[connector] object RequestEncoder extends Logging {
 
   def encode(r: CassandraRequest)(implicit byteOrder: ByteOrder): (RequestOpcode, ByteString) = {
     r match {

@@ -86,6 +86,11 @@ sealed trait CvResult[+A] {
     case CvError(_) => None
   }
 
+  def asEither: Either[Seq[String], A] = this match {
+    case CvSuccess(v) => Right(v)
+    case CvError(e) => Left(e)
+  }
+
   def recover[AA >: A](errManager: PartialFunction[CvError, AA]): CvResult[AA] = this match {
     case CvSuccess(v) => CvSuccess(v)
     case e: CvError => if (errManager isDefinedAt e) CvSuccess(errManager(e)) else this
