@@ -11,9 +11,9 @@ import play.api.libs.iteratee.{Enumeratee, Enumerator}
 import athena.Responses.Timedout
 import athena.Responses.ErrorResponse
 import spray.util.LoggingContext
-import scala.collection.mutable.Builder
+import scala.collection.mutable
 
-object Pipelining {
+object pipelining {
   type Pipeline = AthenaRequest => Future[AthenaResponse]
 
   type QueryPipeline = Statement => Enumerator[Row]
@@ -52,9 +52,9 @@ object Pipelining {
       }
   }
 
-  def updatePipeline(pipeline: Pipeline)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Future[Seq[Row]] = {
+  def queryPipeline(pipeline: Pipeline)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Future[Seq[Row]] = {
     stmt => {
-      def collectRows(acc: Builder[Row, Seq[Row]], meta: Option[ResultSetMetadata], ps: Option[ByteString]): Future[Seq[Row]] = {
+      def collectRows(acc: mutable.Builder[Row, Seq[Row]], meta: Option[ResultSetMetadata], ps: Option[ByteString]): Future[Seq[Row]] = {
         getRows(pipeline, stmt, ps).flatMap { rowsOpt =>
           rowsOpt.map { rows =>
             val metadata = meta.getOrElse(ResultSetMetadata(rows))
@@ -80,21 +80,21 @@ object Pipelining {
   }
 
   def updatePipeline(connection: ActorRef)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Future[Seq[Row]] = {
-    updatePipeline(pipeline(connection))
+    queryPipeline(pipeline(connection))
   }
 
   /**
    * Create a new pipeline that has the ability to asynchronously execute a Statement and
    * return an Enumerator of the resulting rows.
    */
-  def queryPipeline(pipeline: Pipeline)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Enumerator[Row] = {
+  def streamingPipeline(pipeline: Pipeline)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Enumerator[Row] = {
     val rowsEnum = rowsEnumerator(pipeline)
 
     stmt => rowsEnum(stmt)
   }
 
   def queryPipeline(connection: ActorRef)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Enumerator[Row] = {
-    queryPipeline(pipeline(connection))
+    streamingPipeline(pipeline(connection))
   }
 
   private case class EnumeratorState(pageInfo: Option[ByteString] = None, metadata: Option[ResultSetMetadata] = None, beforeFirstPage: Boolean = true)

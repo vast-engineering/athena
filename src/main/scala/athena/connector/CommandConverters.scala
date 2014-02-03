@@ -38,7 +38,7 @@ private object CommandConverters {
   }
 
   private def queryToRequest(cmd: Query, settings: QuerySettings): FetchRequest = cmd match {
-    case SimpleStatement(query, values, keyspace, routingKey, consistency, serialConsistency, fetchSize) =>
+    case SimpleStatement(query, values, consistency, serialConsistency, fetchSize) =>
       //Prevent users from manually switching keyspaces - if we're using a cluster connection,
       // swapping a keyspace on a single connection can (and will) cause *very* strange
       // behavior with other connections to the same host and other node connections.

@@ -20,10 +20,10 @@ class SessionSpec extends WordSpec with Matchers {
       val session = Session(Hosts, Port)
 
       try {
-        val aggregateRows = Await.result(session.executeUpdate("select * from testks.users"), Duration(10, TimeUnit.SECONDS))
+        val aggregateRows = Await.result(session.execute("select * from testks.users"), Duration(10, TimeUnit.SECONDS))
         assert(!aggregateRows.isEmpty)
 
-        val rows = Await.result(session.executeQuery("select * from testks.users") |>>> Iteratee.getChunks, Duration(10, TimeUnit.SECONDS))
+        val rows = Await.result(session.executeStream("select * from testks.users") |>>> Iteratee.getChunks, Duration(10, TimeUnit.SECONDS))
         assert(!rows.isEmpty)
       } finally {
         session.close()

@@ -21,8 +21,6 @@ object Requests {
   sealed trait Query extends AthenaRequest
 
   sealed trait Statement extends Query {
-    def keyspace: Option[String]
-    def routingKey: Option[ByteString]
     def consistency: Option[Consistency]
     def serialConsistency: Option[SerialConsistency]
     def fetchSize: Option[Int]
@@ -39,8 +37,6 @@ object Requests {
    */
   case class SimpleStatement(query: String,
                              values: Seq[CValue] = Seq(),
-                             keyspace: Option[String] = None,
-                             routingKey: Option[ByteString] = None,
                              consistency: Option[Consistency] = None,
                              serialConsistency: Option[SerialConsistency] = None,
                              fetchSize: Option[Int] = None) extends Statement

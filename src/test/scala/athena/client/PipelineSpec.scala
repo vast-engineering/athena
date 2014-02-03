@@ -34,7 +34,7 @@ with Matchers with BeforeAndAfterAll with TestLogging {
       val pipeline = within(timeoutDuration) {
         IO(Athena) ! Athena.Connect(Hosts.head.getHostAddress, Port, Some("testks"), None)
         expectMsgType[Athena.Connected]
-        Pipelining.queryPipeline(lastSender)
+        pipelining.queryPipeline(lastSender)
       }
       "execute a simple query" in {
         simpleQuery(pipeline)
@@ -44,7 +44,7 @@ with Matchers with BeforeAndAfterAll with TestLogging {
       val connection = within(timeoutDuration) {
         IO(Athena) ! Athena.NodeConnectorSetup(Hosts.head.getHostAddress, Port, Some("testks"), None)
         expectMsgType[Athena.NodeConnectorInfo]
-        Pipelining.queryPipeline(lastSender)
+        pipelining.queryPipeline(lastSender)
       }
       "execute a simple query" in {
         simpleQuery(connection)

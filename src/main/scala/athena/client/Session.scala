@@ -3,9 +3,8 @@ package athena.client
 import akka.actor._
 import akka.io.IO
 import akka.pattern._
-import akka.util.{Timeout, ByteString}
+import akka.util.Timeout
 import akka.actor.Status.Failure
-import akka.event.{Logging, LoggingAdapter}
 
 import athena.{SerialConsistency, Consistency, Athena}
 
@@ -14,7 +13,7 @@ import play.api.libs.iteratee.Enumerator
 import athena.data.CValue
 import athena.Consistency.Consistency
 import athena.SerialConsistency.SerialConsistency
-import athena.Athena.{ClusterConnectorInfo, AthenaException}
+import athena.Athena.AthenaException
 import athena.Requests.SimpleStatement
 
 import java.util.concurrent.TimeUnit
@@ -22,7 +21,7 @@ import java.net.InetAddress
 import scala.concurrent.duration.{FiniteDuration, Duration}
 import scala.concurrent.{ExecutionContext, Future}
 import spray.util.LoggingContext
-import athena.client.Pipelining.Pipeline
+import athena.client.pipelining.Pipeline
 
 trait Session {
 
@@ -30,12 +29,10 @@ trait Session {
    * Execute a query and return an asynchronous stream of result rows. Note, this method will 
    * defer actual execution of the query until the Enumerator has an Iteratee attached to it.
    */
-  def executeQuery(query: String,
-                   values: Seq[CValue] = Seq(),
-                   keyspace: Option[String] = None,
-                   routingKey: Option[ByteString] = None,
-                   consistency: Consistency = Consistency.ONE,
-                   serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Enumerator[Row]
+  def executeStream(query: String,
+                    values: Seq[CValue] = Seq(),
+                    consistency: Consistency = Consistency.ONE,
+                    serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Enumerator[Row]
 
   /**
    * Execute a query intended to update data. As opposed to the method above, this method 
@@ -43,13 +40,10 @@ trait Session {
    * avoids the need to stream rows, but be aware that if the query returns a large row count, they will
    * all be buffered in memory.
    */
-  //TODO: This method needs a better name.
-  def executeUpdate(query: String,
-                   values: Seq[CValue] = Seq(),
-                   keyspace: Option[String] = None,
-                   routingKey: Option[ByteString] = None,
-                   consistency: Consistency = Consistency.ONE,
-                   serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Future[Seq[Row]]
+  def execute(query: String,
+              values: Seq[CValue] = Seq(),
+              consistency: Consistency = Consistency.ONE,
+              serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Future[Seq[Row]]
 
 
   /**
@@ -60,13 +54,12 @@ trait Session {
 
 object Session {
 
-  private val defaultTimeoutDuration = FiniteDuration(5, TimeUnit.SECONDS)
+  private val defaultTimeoutDuration = FiniteDuration(45, TimeUnit.SECONDS)
   private implicit val defaultTimeout = Timeout(defaultTimeoutDuration)
- //private implicit def getLogger(implicit actorRefFactory: ActorSystem): LoggingAdapter = Logging.getLogger(actorRefFactory, classOf[Session])
 
   def apply(connection: ActorRef)
            (implicit log: LoggingContext, ec: ExecutionContext): Session = {
-    new SimpleSession(Pipelining.pipeline(connection)) {
+    new SimpleSession(pipelining.pipeline(connection)) {
       /**
        * This method must be called to properly dispose of the Session.
        */
@@ -79,11 +72,11 @@ object Session {
   /**
    * Create a session using an existing ActorSystem
    */
-  def apply(initialHosts: Set[InetAddress], port: Int, keyspace: Option[String] = None, 
+  def apply(initialHosts: Set[InetAddress], port: Int, keyspace: Option[String] = None,
             waitForConnection: Boolean = true)(implicit system: ActorRefFactory): Session = {
     import system.dispatcher
     val connection = getConnection(initialHosts, port, keyspace, system, waitForConnection)
-    val pipe = Pipelining.pipeline(connection)
+    val pipe = pipelining.pipeline(connection)
     new SimpleSession(pipe) {
       def close(): Unit = {
         //shutdown our actor
@@ -95,8 +88,8 @@ object Session {
   private def getConnection(hosts: Set[InetAddress], port: Int,
                             keyspace: Option[String] = None, actorRefFactory: ActorRefFactory,
                             waitForConnect: Boolean = true): Future[ActorRef] = {
-    import actorRefFactory.dispatcher
-    val connectTimeout = if(waitForConnect) defaultTimeoutDuration else Duration.Inf
+    //import actorRefFactory.dispatcher
+    val connectTimeout = if (waitForConnect) defaultTimeoutDuration else Duration.Inf
     val setup = Athena.ClusterConnectorSetup(hosts, port, keyspace, None)
     val initializer = actorRefFactory.actorOf(Props(new ConnectorInitializer(connectTimeout)))
     initializer.ask(setup).mapTo[ActorRef]
@@ -135,27 +128,23 @@ object Session {
   }
 
   private abstract class SimpleSession(pipeline: Pipeline)
-                              (implicit log: LoggingContext, ec: ExecutionContext) extends Session {
+                                      (implicit log: LoggingContext, ec: ExecutionContext) extends Session {
 
-    private[this] val queryPipeline = Pipelining.queryPipeline(pipeline)
-    private[this] val updatePipeline = Pipelining.updatePipeline(pipeline)
+    private[this] val queryPipe = pipelining.queryPipeline(pipeline)
+    private[this] val streamPipe = pipelining.streamingPipeline(pipeline)
 
-    def executeQuery(query: String,
+    def executeStream(query: String,
                      values: Seq[CValue] = Seq(),
-                     keyspace: Option[String] = None,
-                     routingKey: Option[ByteString] = None,
                      consistency: Consistency = Consistency.ONE,
                      serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Enumerator[Row] = {
-      queryPipeline(SimpleStatement(query, values, keyspace, routingKey, Some(consistency), Some(serialConsistency)))
+      streamPipe(SimpleStatement(query, values, Some(consistency), Some(serialConsistency)))
     }
 
-    def executeUpdate(query: String,
+    def execute(query: String,
                       values: Seq[CValue] = Seq(),
-                      keyspace: Option[String] = None,
-                      routingKey: Option[ByteString] = None,
                       consistency: Consistency = Consistency.ONE,
                       serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Future[Seq[Row]] = {
-      updatePipeline(SimpleStatement(query, values, keyspace, routingKey, Some(consistency), Some(serialConsistency)))
+      queryPipe(SimpleStatement(query, values,Some(consistency), Some(serialConsistency)))
     }
 
   }

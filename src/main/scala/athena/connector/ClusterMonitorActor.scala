@@ -9,7 +9,7 @@ import java.net.{InetAddress, InetSocketAddress}
 import scala.concurrent.duration.Duration
 import java.util.concurrent.TimeUnit
 
-import athena.client.Pipelining
+import athena.client.pipelining._
 
 import akka.util.Timeout
 
@@ -103,7 +103,7 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
     context.setReceiveTimeout(Duration.Inf)
 
     context.watch(connection)
-    val pipeline = Pipelining.queryPipeline(connection)
+    val pipeline = queryPipeline(connection)
 
     def whileConnected(hosts: Map[InetAddress, HostInfo]): Receive = {
       case info: ClusterMetadata =>
