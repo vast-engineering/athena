@@ -135,7 +135,7 @@ object Session {
     }
   }
 
-  private abstract class SimpleSession(pipeline: Pipeline)
+  abstract class SimpleSession(pipeline: Pipeline)
                                       (implicit log: LoggingContext, ec: ExecutionContext) extends Session {
 
     private[this] val queryPipe = pipelining.queryPipeline(pipeline)
