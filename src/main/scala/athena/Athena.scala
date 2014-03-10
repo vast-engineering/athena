@@ -8,6 +8,7 @@ import java.net.{InetAddress, InetSocketAddress}
 import Consistency._
 
 import spray.util.actorSystem
+import athena.connector.CassandraError
 
 object Athena extends ExtensionKey[AthenaExt] {
 
@@ -225,19 +226,20 @@ object Athena extends ExtensionKey[AthenaExt] {
    * Whenever a command cannot be completed, the queried actor will reply with
    * this message, wrapping the original command which failed.
    */
-  case class CommandFailed(cmd: Command) extends Event
+  case class CommandFailed(cmd: Command, error: Option[Error] = None) extends Event
 
   /**
    * Events emitted by a node connector.
    */
-  sealed trait NodeEvent extends Event
-  sealed trait ConnectedEvent extends NodeEvent
-  case class NodeConnected(host: InetAddress) extends ConnectedEvent
-  case object ClusterConnected extends ConnectedEvent
+  sealed trait NodeStatusEvent extends Event
+  case class NodeConnected(host: InetAddress) extends NodeStatusEvent
+  case class NodeFailed(host: InetAddress, error: Error) extends NodeStatusEvent
+  case class NodeDisconnected(host: InetAddress) extends NodeStatusEvent
 
-  sealed trait DisconnectedEvent extends NodeEvent
-  case class NodeDisconnected(host: InetAddress) extends DisconnectedEvent
-  case object ClusterDisconnected extends DisconnectedEvent
+  sealed trait ClusterStatusEvent extends Event
+  case object ClusterDisconnected extends ClusterStatusEvent
+  case object ClusterConnected extends ClusterStatusEvent
+  case class ClusterFailed(error: Error) extends ClusterStatusEvent
 
   //exceptions
   class AthenaException(message: String, cause: Option[Throwable]) extends RuntimeException(message, cause.orNull) {

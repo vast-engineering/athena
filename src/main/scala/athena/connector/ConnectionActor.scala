@@ -225,8 +225,10 @@ class ConnectionActor(connectCommander: ActorRef, connect: Athena.Connect,
 
     def initConnection(): State = {
 
-      def failed(): State = {
-        connectCommander ! Athena.CommandFailed(connect)
+      //TODO - make the error more granular - we need a way to indicate that an
+      //error is transient (i.e. can't reach the host) vs. permanently fatal (can't authenticate, bad keyspace, etc)
+      def failed(error: Option[Athena.Error] = None): State = {
+        connectCommander ! Athena.CommandFailed(connect, error)
         shutdown()
       }
       
@@ -235,7 +237,13 @@ class ConnectionActor(connectCommander: ActorRef, connect: Athena.Connect,
         pipelineHandler ! init.command(RequestEnvelope(0, CassandraRequests.Startup))
         state {
           case init.Event(ResponseEnvelope(_, CassandraResponses.Ready)) => setupEvents()
-          case ReceiveTimeout => 
+          case init.Event(ResponseEnvelope(_, resp: Athena.Error)) =>
+            log.error("Error while connecting - {}", resp)
+            failed(Some(resp))
+          case init.Event(ResponseEnvelope(_, resp)) =>
+            log.error("Unexpected response {} to connection request.", resp)
+            failed(Some(Athena.ConnectionError(remoteAddress.getHostName, remoteAddress.getPort)))
+          case ReceiveTimeout =>
             log.error("Timed out waiting for READY response.")
             failed()
         }
@@ -248,6 +256,12 @@ class ConnectionActor(connectCommander: ActorRef, connect: Athena.Connect,
           pipelineHandler ! init.command(RequestEnvelope(0, CassandraRequests.Register(Seq(TOPOLOGY_CHANGE, STATUS_CHANGE, SCHEMA_CHANGE))))
           state {
             case init.Event(ResponseEnvelope(_, CassandraResponses.Ready)) => setupKeyspace()
+            case init.Event(ResponseEnvelope(_, resp: CassandraError)) =>
+              log.error("Error while subscribing to events - {}", resp)
+              failed(Some(resp))
+            case init.Event(ResponseEnvelope(_, resp)) =>
+              log.error("Unexpected response {} to event setup request.", resp)
+              failed(Some(Athena.ConnectionError(remoteAddress.getHostName, remoteAddress.getPort)))
             case ReceiveTimeout =>
               log.error("Timed out waiting for READY response for event subscriptions.")
               failed()
@@ -273,6 +287,11 @@ class ConnectionActor(connectCommander: ActorRef, connect: Athena.Connect,
             case init.Event(ResponseEnvelope(_, CassandraResponses.KeyspaceResult(ksName))) =>
               log.debug("Successfully set keyspace to {}", ksName)
               connectionPrepared()
+            case init.Event(ResponseEnvelope(_, resp: CassandraError)) =>
+              log.error("Error while setting keyspace - {}", resp)
+              failed(Some(resp))
+            case init.Event(ResponseEnvelope(_, resp)) =>
+              failed(Some(Athena.ConnectionError(remoteAddress.getHostName, remoteAddress.getPort)))
             case ReceiveTimeout =>
               log.error("Timed out while setting keyspace.")
               failed()

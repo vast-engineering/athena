@@ -102,9 +102,15 @@ class ClusterConnector(commander: ActorRef,
 
       case NodeConnected(addr) =>
         //wait for at least one node to connect before we route any requests
-
         hostUp(addr)
         context.become(running)
+
+      case NodeFailed(addr, error) =>
+        //this is a fatal error - we cannot do anything with this
+        commander ! ClusterFailed(error)
+        //now shut down
+        context.become(closing(Athena.Abort, Set()))
+
     }
 
     behavior orElse defaultBehavior

@@ -56,6 +56,8 @@ private[athena] class NodeConnector(commander: ActorRef,
   def receive: Receive = defaultBehavior
 
   //if retryCount is non-negative, we are attempting to reconnect after a disconnection.
+  //this method attempts to connect to just a single host - if it's successful, we then open
+  //the rest of the connections
   private def connecting(connection: ActorRef, retryCount: Int = -1) {
 
     context.setReceiveTimeout(settings.poolSettings.connectionTimeout)
@@ -69,9 +71,16 @@ private[athena] class NodeConnector(commander: ActorRef,
         }
         connected(connection)
 
-      case Athena.CommandFailed(Athena.Connect(_, _, _, _)) =>
+      case Athena.CommandFailed(Athena.Connect(_, _, _, _), None) =>
+        //no attached error to the failed response means we can try to recover
         closeConnection(connection)
         reconnecting(retryCount + 1)
+
+      case x@Athena.CommandFailed(Athena.Connect(_, _, _, _), Some(error)) =>
+        closeConnection(connection)
+        commander ! NodeFailed(remoteAddress.getAddress, error)
+        //now kill ourselves - we cannot connect
+        context.stop(self)
 
       case Terminated(`connection`)  ⇒
         reconnecting(retryCount + 1)
@@ -216,7 +225,7 @@ private[athena] class NodeConnector(commander: ActorRef,
           }
           step(connections.updated(connection, Connected(connection, 0)))
 
-        case Athena.CommandFailed(Athena.Connect(remoteHost, _, _, _)) =>
+        case Athena.CommandFailed(Athena.Connect(remoteHost, _, _, _), _) =>
           disconnect(connections.keySet)
 
         case Terminated(child) if connections.contains(child) =>
@@ -280,7 +289,7 @@ private[athena] class NodeConnector(commander: ActorRef,
           case Athena.Connected(_, _) =>
             closing(closeActors + shutdownConnection(sender, command), command, commanders)
 
-          case Athena.CommandFailed(Athena.Connect(remoteHost, _, _, _)) =>
+          case Athena.CommandFailed(Athena.Connect(remoteHost, _, _, _), _) =>
           //ignore
 
           case Terminated(child) if closeActors.contains(child) ⇒

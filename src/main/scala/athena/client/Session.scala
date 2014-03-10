@@ -22,6 +22,7 @@ import scala.concurrent.duration.{FiniteDuration, Duration}
 import scala.concurrent.{ExecutionContext, Future}
 import spray.util.LoggingContext
 import athena.client.pipelining.Pipeline
+import athena.connector.ClusterConnector
 
 trait Session {
 
@@ -57,6 +58,9 @@ object Session {
   private val defaultTimeoutDuration = FiniteDuration(45, TimeUnit.SECONDS)
   private implicit val defaultTimeout = Timeout(defaultTimeoutDuration)
 
+  /**
+   * Create a session using an already existing (and assumed valid) Connection ActorRef.
+   */
   def apply(connection: ActorRef)
            (implicit log: LoggingContext, ec: ExecutionContext): Session = {
     new SimpleSession(pipelining.pipeline(connection)) {
@@ -98,12 +102,12 @@ object Session {
   private class ConnectorInitializer(connectTimeout: Duration) extends Actor with ActorLogging {
 
     def receive: Receive = {
-      case x: Athena.ConnectionCreationCommand =>
+      case x: Athena.ClusterConnectorSetup =>
         IO(Athena)(context.system) ! x
         val connectCommander = sender
         context.become {
-          case Athena.CommandFailed(_) =>
-            connectCommander ! Failure(new AthenaException("Could not create connector."))
+          case Athena.CommandFailed(_, error) =>
+            connectCommander ! Failure(new AthenaException("Could not create connector.", error.map(_.toThrowable)))
             context.stop(self)
 
           case evt: Athena.ConnectionCreatedEvent =>
@@ -111,9 +115,13 @@ object Session {
             val connector = sender
             context.setReceiveTimeout(connectTimeout)
             context.become {
-              case connected: Athena.ConnectedEvent =>
+              case Athena.ClusterConnected =>
                 log.debug("Connector initialized - returning connector")
                 connectCommander ! connector
+                context.stop(self)
+
+              case Athena.ClusterFailed(error) =>
+                connectCommander ! Failure(error.toThrowable)
                 context.stop(self)
 
               case ReceiveTimeout =>

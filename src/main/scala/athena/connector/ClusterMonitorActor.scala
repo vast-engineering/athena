@@ -83,8 +83,13 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
             }
             context.become(connected(sender, host, allHosts))
 
-          case Athena.CommandFailed(Athena.Connect(remoteHost, _, _, _)) =>
-            log.debug("Connection to host {} failed, trying next host.", connectionHosts.head.addr)
+          case Athena.CommandFailed(Athena.Connect(remoteHost, _, _, _), error) =>
+            if(error.isDefined) {
+              log.warning("Cluster connector cannot connect to host {} due to error {}", connectionHosts.head.addr, error.get)
+              log.warning("Trying next host.")
+            } else {
+              log.debug("Connection to host {} failed, trying next host.", connectionHosts.head.addr)
+            }
             context.become(tryConnect(connectionHosts.tail))
 
           case ReceiveTimeout =>
