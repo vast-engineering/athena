@@ -1,7 +1,5 @@
 package athena.connector.pipeline
 
-import akka.io.{SymmetricPipePair, PipePair, SymmetricPipelineStage}
-
 import akka.util.ByteString
 
 import scala.annotation.tailrec

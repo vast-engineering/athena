@@ -3,7 +3,7 @@ package athena.connector
 import akka.actor._
 import akka.io._
 import akka.io.IO
-import akka.io.TcpPipelineHandler.Init
+import athena.connector.pipeline.TcpPipelineHandler.Init
 import akka.actor.Terminated
 
 import athena._

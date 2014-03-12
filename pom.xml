@@ -33,10 +33,10 @@
         <scala.major.version>2.10</scala.major.version>
         <scala.minor.version>3</scala.minor.version>
         <scala.version>${scala.major.version}.${scala.minor.version}</scala.version>
-        <akka.version>2.2.3</akka.version>
+        <akka.version>2.3.0</akka.version>
         <slf4j.version>1.7.5</slf4j.version>
-        <spray.version>1.2.0</spray.version>
-        <play.version>2.2.1</play.version>
+        <spray.version>1.3.0</spray.version>
+        <play.version>2.2.2</play.version>
 
     </properties>
 
@@ -53,6 +53,12 @@
             <groupId>org.scala-lang</groupId>
             <artifactId>scala-library</artifactId>
             <version>${scala.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.typesafe</groupId>
+            <artifactId>config</artifactId>
+            <version>1.2.0</version>
         </dependency>
 
         <dependency>
