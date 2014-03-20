@@ -10,14 +10,17 @@ private[client] class ResultSetMetadata(val columnDefs: IndexedSeq[ColumnDef]) {
   //internally used to cache the columnName -> index lookup
   private[this] val indexMap: mutable.Map[String, Int] = mutable.Map()
 
-  def indexOfColumn(name: String): Int = {
-    indexMap.getOrElseUpdate(name, {
+  def indexOfColumn(name: String): Option[Int] = {
+    indexMap.get(name).orElse {
       val index = columnDefs.indexWhere(_.name.equalsIgnoreCase(name))
-      if(index < 0) {
-        throw new IllegalArgumentException(s"Unknown column $name")
+      if (index >= 0) {
+        //this means we found the column
+        indexMap.put(name, index)
+        Some(index)
+      } else {
+        None
       }
-      index
-    })
+    }
   }
 }
 
@@ -31,13 +34,28 @@ class Row private (metadata: ResultSetMetadata, data: IndexedSeq[ByteString]) {
 
   val columns = metadata.columnDefs
 
-  def value(index: Int): CValue = {
-    if(index < 0 || index >= data.size) {
-      throw new IllegalArgumentException(s"Invalid column index $index")
+  val size = metadata.columnDefs.size
+
+  def apply(idx: Int): Option[CValue] = {
+    if(idx < 0 || idx > data.size) {
+      None
+    } else {
+      Some(CValue.parse(metadata.columnDefs(idx).dataType, data(idx)))
     }
-    CValue.parse(metadata.columnDefs(index).dataType, data(index))
   }
-  def value(name: String): CValue = value(metadata.indexOfColumn(name))
+  def apply(name: String): Option[CValue] = {
+    metadata.indexOfColumn(name).flatMap(idx => apply(idx))
+  }
+
+  def value(index: Int): CValue = {
+    apply(index).getOrElse(throw new IllegalArgumentException(s"Invalid column index $index"))
+  }
+  def value(name: String): CValue = {
+    apply(name).getOrElse {
+      throw new IllegalArgumentException(s"Invalid column name $name")
+    }
+  }
+
   def values: Iterator[CValue] = metadata.columnDefs.zip(data).iterator.map {
     case (columnDef, columnData) => CValue.parse(columnDef.dataType, columnData)
   }
@@ -59,3 +77,4 @@ object Row {
     new Row(metadata, data)
   }
 }
+

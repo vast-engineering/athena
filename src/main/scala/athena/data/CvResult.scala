@@ -91,9 +91,9 @@ sealed trait CvResult[+A] {
     case CvError(e) => Left(e)
   }
 
-  def recover[AA >: A](errManager: PartialFunction[CvError, AA]): CvResult[AA] = this match {
+  def recover[AA >: A](errManager: PartialFunction[CvError, CvResult[AA]]): CvResult[AA] = this match {
     case CvSuccess(v) => CvSuccess(v)
-    case e: CvError => if (errManager isDefinedAt e) CvSuccess(errManager(e)) else this
+    case e: CvError => if (errManager isDefinedAt e) errManager(e) else this
   }
 }
 

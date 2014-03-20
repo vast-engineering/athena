@@ -7,8 +7,7 @@
         </encoder>
     </appender>
 
-    <logger name="athena" level="INFO"/>
-    <logger name="athena.connector.ConnectionActor" level="DEBUG"/>
+    <logger name="athena" level="DEBUG"/>
 
     <root level="WARN">
         <appender-ref ref="STDOUT"/>

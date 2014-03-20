@@ -19,7 +19,7 @@ sealed trait CValue {
   /**
    * Tries to convert the node into a T, throwing an exception if it can't. An implicit Reads[T] must be defined.
    */
-  def as[T](implicit fjs: Reads[T]): T = fjs.reads(this).fold(
+  def as[T](implicit fjs: Reads[T]): T = fjs.read(this).fold(
     valid = identity,
     invalid = e => throw new ConversionException(e)
   )
@@ -27,7 +27,7 @@ sealed trait CValue {
   /**
    * Tries to convert the node into a JsResult[T] (Success or Error). An implicit Reads[T] must be defined.
    */
-  def validate[T](implicit rds: Reads[T]): CvResult[T] = rds.reads(this)
+  def validate[T](implicit rds: Reads[T]): CvResult[T] = rds.read(this)
 
   def prettyPrint = this.toString.take(100)
 
@@ -72,7 +72,7 @@ object CValue {
    *
    * @param cvalue CValue to transform as an instance of T.
    */
-  def fromValue[T](cvalue: CValue)(implicit fjs: Reads[T]): CvResult[T] = fjs.reads(cvalue)
+  def fromValue[T](cvalue: CValue)(implicit fjs: Reads[T]): CvResult[T] = fjs.read(cvalue)
 
   def parse(dataType: DataType, data: ByteString): CValue = {
 

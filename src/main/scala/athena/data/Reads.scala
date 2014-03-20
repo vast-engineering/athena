@@ -13,12 +13,10 @@ import com.fasterxml.jackson.core.JsonParseException
 import scala.reflect.ClassTag
 
 /**
- * A trait that defines a class that can convert from a cassandra value to another type A.
- *
- * This is used to unmarshal the Cassandra-specific return values from queries into other data types.
+ * A trait that defines a class that can convert from a type A value to another type B.
  */
 @implicitNotFound(
-"No Cassandra deserializer found for type ${A}. Try to implement an implicit Reads or Format for this type."
+"No Cassandra deserializer found for type ${A}. Try to implement an implicit Reads for this type."
 )
 trait Reads[A] {
   self =>
@@ -26,37 +24,37 @@ trait Reads[A] {
   /**
    * Convert the cassandra value into an A
    */
-  def reads(cvalue: CValue): CvResult[A]
+  def read(cvalue: CValue): CvResult[A]
 
   def map[B](f: A => B): Reads[B] =
-    Reads[B] { cvalue => self.reads(cvalue).map(f) }
+    Reads[B] { cvalue => self.read(cvalue).map(f) }
 
   def flatMap[B](f: A => Reads[B]): Reads[B] = Reads[B] { cvalue =>
-    self.reads(cvalue).flatMap(t => f(t).reads(cvalue))
+    self.read(cvalue).flatMap(t => f(t).read(cvalue))
   }
 
   def filter(f: A => Boolean): Reads[A] =
-    Reads[A] { cvalue => self.reads(cvalue).filter(f) }
+    Reads[A] { cvalue => self.read(cvalue).filter(f) }
 
   def filter(error: String)(f: A => Boolean): Reads[A] =
-    Reads[A] { cvalue => self.reads(cvalue).filter(error)(f) }
+    Reads[A] { cvalue => self.read(cvalue).filter(error)(f) }
 
   def filterNot(f: A => Boolean): Reads[A] =
-    Reads[A] { cvalue => self.reads(cvalue).filterNot(f) }
+    Reads[A] { cvalue => self.read(cvalue).filterNot(f) }
 
   def filterNot(error: String)(f: A => Boolean): Reads[A] =
-    Reads[A] { cvalue => self.reads(cvalue).filterNot(error)(f) }
+    Reads[A] { cvalue => self.read(cvalue).filterNot(error)(f) }
 
   def collect[B](error: String)(f: PartialFunction[A, B]) =
-    Reads[B] { cvalue => self.reads(cvalue).collect(error)(f) }
+    Reads[B] { cvalue => self.read(cvalue).collect(error)(f) }
 
   def orElse(v: Reads[A]): Reads[A] =
-    Reads[A] { cvalue => self.reads(cvalue).orElse(v.reads(cvalue)) }
+    Reads[A] { cvalue => self.read(cvalue).orElse(v.read(cvalue)) }
 
   def compose[B <: CValue](rb: Reads[B]): Reads[A] =
     Reads[A] { value =>
-      rb.reads(value) match {
-        case CvSuccess(b) => this.reads(b)
+      rb.read(value) match {
+        case CvSuccess(b) => self.read(b)
         case CvError(e) => CvError(e)
       }
     }
@@ -65,7 +63,7 @@ trait Reads[A] {
 
 object Reads extends DefaultReads with MetaReaders {
   def apply[A](f: CValue => CvResult[A]): Reads[A] = new Reads[A] {
-    def reads(value: CValue) = f(value)
+    override def read(cvalue: CValue): CvResult[A] = f(cvalue)
   }
 }
 
@@ -101,19 +99,19 @@ trait DefaultReads {
 //  }
 
   implicit def optionReads[T](implicit rt: Reads[T]): Reads[Option[T]] = new Reads[Option[T]] {
-      def reads(cvalue: CValue): CvResult[Option[T]] = cvalue match {
+      def read(cvalue: CValue): CvResult[Option[T]] = cvalue match {
         case CNull => CvSuccess(None)
-        case x => rt.reads(x).map(Some(_))
+        case x => rt.read(x).map(Some(_))
       }
   }
 
   import scala.reflect.runtime.universe._
   def nonNull[T](r: PartialFunction[CValue, CvResult[T]])(implicit t: TypeTag[T]): Reads[T] = {
     new Reads[T] {
-      def reads(cvalue: CValue): CvResult[T] = {
+      def read(cvalue: CValue): CvResult[T] = {
         cvalue match {
           case CNull => CvError(s"Cannot convert null value to type ${t.tpe.toString}.")
-          case x => if(r.isDefinedAt(x)) r(x) else CvError("Cannot convert value to to type ${t.tpe.toString}.")
+          case x => if(r.isDefinedAt(x)) r(x) else CvError(s"Cannot convert value to to type ${t.tpe.toString}.")
         }
       }
     }
@@ -121,8 +119,8 @@ trait DefaultReads {
 
   def reads[T](r: PartialFunction[CValue, CvResult[T]])(implicit t: TypeTag[T]): Reads[T] = {
     new Reads[T] {
-      def reads(cvalue: CValue): CvResult[T] = {
-        if(r.isDefinedAt(cvalue)) r(cvalue) else CvError("Cannot convert value to to type ${t.tpe.toString}.")
+      def read(cvalue: CValue): CvResult[T] = {
+        if(r.isDefinedAt(cvalue)) r(cvalue) else CvError(s"Cannot convert value to to type ${t.tpe.toString}.")
       }
     }
   }
@@ -217,7 +215,7 @@ trait DefaultReads {
     case CNull => CvSuccess(Map.empty)
     case CMap(values) =>
       val converted: Iterable[CvResult[(A, B)]] = values.map {
-        case (key, value) => keyReads.reads(key).zip(valueReads.reads(value))
+        case (key, value) => keyReads.read(key).zip(valueReads.read(value))
       }
       CvResult.sequence(converted).map(_.toMap)
   }
@@ -225,13 +223,13 @@ trait DefaultReads {
   implicit def seqReads[A](implicit valueReads: Reads[A], a: TypeTag[A]): Reads[Seq[A]] = reads {
     case CNull => CvSuccess(Seq.empty)
     case CList(values) =>
-      CvResult.sequence(values.map(valueReads.reads(_)))
+      CvResult.sequence(values.map(valueReads.read(_)))
   }
 
   implicit def setReads[A](implicit valueReads: Reads[A], a: TypeTag[A]): Reads[Set[A]] = reads {
     case CNull => CvSuccess(Set.empty)
-    case CList(values) => CvResult.sequence(values.map(valueReads.reads(_)).toSet)
-    case CSet(values) => CvResult.sequence(values.map(valueReads.reads(_)))
+    case CList(values) => CvResult.sequence(values.map(valueReads.read(_)).toSet)
+    case CSet(values) => CvResult.sequence(values.map(valueReads.read(_)))
   }
 
   implicit object ByteStringReads extends Reads[ByteString] {
@@ -240,7 +238,7 @@ trait DefaultReads {
     /**
      * Convert the cassandra value into an A
      */
-    def reads(cvalue: CValue): CvResult[ByteString] = cvalue match {
+    def read(cvalue: CValue): CvResult[ByteString] = cvalue match {
       case CASCIIString(value) => CvSuccess(ByteString(value, "ASCII"))
       case CVarChar(value) => CvSuccess(ByteString(value, "UTF-8"))
       case CBigInt(value) => CvSuccess(newBuilder(8).putLong(value).result())
