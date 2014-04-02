@@ -1,29 +1,18 @@
 package athena.connector
 
-import org.scalatest.{Matchers, WordSpecLike, BeforeAndAfterAll}
+import org.scalatest.{WordSpec, Matchers, WordSpecLike, BeforeAndAfterAll}
 
-import akka.actor.ActorSystem
-import akka.testkit.DefaultTimeout
-import akka.testkit.ImplicitSender
-import akka.testkit.TestKit
 import scala.concurrent.duration._
 
 import scala.language.postfixOps
 import akka.io.IO
 import athena.Requests.{FetchRows, SimpleStatement}
 import athena.Responses.Rows
-import athena.{TestLogging, Athena}
+import athena.{AthenaTest, Athena}
 
 import athena.TestData._
 
-class ConnectionActorSpec extends TestKit(ActorSystem("test")) with WordSpecLike
-with TestLogging
-with DefaultTimeout with ImplicitSender
-with Matchers with BeforeAndAfterAll  {
-
-  override def afterAll() {
-    shutdown(system)
-  }
+class ConnectionActorSpec extends WordSpec with AthenaTest with Matchers {
 
   val hostAddress = Hosts.head.getHostAddress
 

@@ -2,9 +2,9 @@ package athena.client
 
 import akka.testkit.{ImplicitSender, DefaultTimeout, TestKit}
 import akka.actor.{ActorSystem}
-import org.scalatest.{Matchers, WordSpecLike, BeforeAndAfterAll}
+import org.scalatest.{WordSpec, Matchers, WordSpecLike, BeforeAndAfterAll}
 import akka.io.IO
-import athena.{TestLogging, Athena}
+import athena.{AthenaTest, Athena}
 import scala.concurrent.duration._
 import akka.util.Timeout
 import scala.concurrent.Await
@@ -16,18 +16,9 @@ import play.api.libs.iteratee.{Iteratee, Enumerator}
 
 import athena.TestData._
 
-class PipelineSpec extends TestKit(ActorSystem("test")) with WordSpecLike
-with DefaultTimeout with ImplicitSender
-with Matchers with BeforeAndAfterAll with TestLogging {
+class PipelineSpec extends WordSpec with AthenaTest with Matchers {
 
   private[this] val timeoutDuration: FiniteDuration = Duration(10, TimeUnit.SECONDS)
-  private[this] implicit val timeout = Timeout(timeoutDuration)
-
-  override def afterAll() {
-    shutdown(system)
-  }
-
-  import system.dispatcher
 
   "A pipeline" when {
     "using a raw connection" should {

@@ -1,9 +1,8 @@
 package athena.connector
 
-import akka.testkit.{ImplicitSender, DefaultTimeout, TestKit}
-import akka.actor.{ActorRef, ActorSystem}
-import org.scalatest.{BeforeAndAfterAll, Matchers, WordSpecLike}
-import athena.{Athena, TestLogging}
+import akka.actor.ActorRef
+import org.scalatest.{WordSpec, Matchers}
+import athena.{AthenaTest, Athena}
 import akka.io.IO
 import athena.Requests.SimpleStatement
 import athena.Responses.Rows
@@ -14,13 +13,7 @@ import scala.language.postfixOps
 
 import athena.TestData._
 
-class ClusterConnectorSpec extends TestKit(ActorSystem("test")) with WordSpecLike
-with DefaultTimeout with ImplicitSender
-with Matchers with BeforeAndAfterAll with TestLogging {
-
-  override def afterAll() {
-    shutdown(system)
-  }
+class ClusterConnectorSpec extends WordSpec with AthenaTest with Matchers {
 
   private def openConnection(keyspace: Option[String] = None): ActorRef = {
     within(10 seconds) {

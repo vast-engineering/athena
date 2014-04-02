@@ -38,6 +38,7 @@ object pipelining {
           throw new AthenaException(s"Request failed - $resp")
 
         case ErrorResponse(_, error) =>
+          log.error("Error with request {}", request)
           throw error.toThrowable
           
         case resp: AthenaResponse =>

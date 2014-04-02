@@ -2,8 +2,12 @@ package athena.client
 
 import athena.data._
 
+/**
+ * A typeclass defining instances that know how to convert a single row from a Cassandra result into a type T
+ */
 trait RowReader[T] { self =>
   def read(cvalue: Row): CvResult[T]
+
   def map[A](f: T => A): RowReader[A] = RowReader[A] { row =>
     self.read(row).map(f)
   }
@@ -57,37 +61,34 @@ object RowReader {
 
   def read[A <: Product, B](f: B => A)(implicit r: RowReader[B]): RowReader[A] = r.map(f)
 
-  implicit def tupleReads[T <: Product, L <: HList](implicit tupler: TuplerAux[L, T], hlr: IndexedRowReader[L, _0]): RowReader[T] = new RowReader[T] {
-    override def read(cvalue: Row): CvResult[T] = {
-      hlr.read(cvalue).map(l => tupler(l))
-    }
-  }
+  implicit def tupleReads[T <: Product, L <: HList](implicit tupler: TuplerAux[L, T], hlr: IndexedRowReader[L, _0]): RowReader[T] =
+    hlr.map(l => tupler(l))
+
+  implicit def hlistReads[L <: HList](implicit hlr: IndexedRowReader[L, _0]): RowReader[L] = hlr
 
   //A RowReader that will extract an HList of type L from a row, starting at the column indexed by N
   trait IndexedRowReader[L <: HList, N <: Nat] extends RowReader[L]
 
   object IndexedRowReader {
-    implicit def nilRowReader[N <: Nat]: IndexedRowReader[HNil, N] = new IndexedRowReader[HNil, N] {
-      override def read(cvalue: Row): CvResult[HNil] = CvSuccess(HNil)
-    }
-
-    implicit def hlistRowReader[H, T <: HList, N <: Nat](implicit rh: Reads[H], rt: IndexedRowReader[T, Succ[N]], ti: ToInt[N]): IndexedRowReader[H :: T, N] = new
-        IndexedRowReader[H :: T, N] {
-
-      val pathReads = at[H](ti.apply())(rh)
-
-      override def read(row: Row): CvResult[::[H, T]] = {
-        val head = pathReads.read(row)
-        val tail = rt.read(row)
-        (head, tail) match {
-          case (CvError(leftError), CvError(rightError)) => CvError(leftError ++ rightError)
-          case (left@CvError(_), _) => left
-          case (_, right@CvError(_)) => right
-          case (CvSuccess(a), CvSuccess(b)) =>
-            CvSuccess(a :: b)
-        }
+    implicit def nilRowReader[N <: Nat]: IndexedRowReader[HNil, N] =
+      new IndexedRowReader[HNil, N] {
+        override def read(cvalue: Row): CvResult[HNil] = CvSuccess(HNil)
       }
 
-    }
+    implicit def hlistRowReader[H, T <: HList, N <: Nat](implicit rh: Reads[H], rt: IndexedRowReader[T, Succ[N]], ti: ToInt[N]): IndexedRowReader[H :: T, N] =
+      new IndexedRowReader[H :: T, N] {
+        val pathReads = at[H](ti.apply())(rh)
+        override def read(row: Row): CvResult[::[H, T]] = {
+          val head = pathReads.read(row)
+          val tail = rt.read(row)
+          (head, tail) match {
+            case (CvError(leftError), CvError(rightError)) => CvError(leftError ++ rightError)
+            case (left@CvError(_), _) => left
+            case (_, right@CvError(_)) => right
+            case (CvSuccess(a), CvSuccess(b)) =>
+              CvSuccess(a :: b)
+          }
+        }
+      }
   }
 }

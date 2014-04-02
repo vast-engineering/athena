@@ -2,8 +2,8 @@ package athena.connector
 
 import akka.testkit._
 import akka.actor.ActorSystem
-import org.scalatest.{BeforeAndAfterAll, Matchers, WordSpecLike}
-import athena.{Athena, TestLogging}
+import org.scalatest.{WordSpec, BeforeAndAfterAll, Matchers, WordSpecLike}
+import athena.{AthenaTest, Athena}
 import scala.concurrent.duration._
 import akka.io.IO
 import athena.client.pipelining
@@ -14,16 +14,7 @@ import scala.concurrent.Await
 
 import athena.TestData._
 
-class ClusterUtilsSpec extends TestKit(ActorSystem("test")) with WordSpecLike
-with TestLogging
-with DefaultTimeout with ImplicitSender
-with Matchers with BeforeAndAfterAll with ClusterUtils {
-
-  override def afterAll() {
-    shutdown(system)
-  }
-
-  import system.dispatcher
+class ClusterUtilsSpec extends WordSpec with AthenaTest with Matchers with ClusterUtils {
 
   private[this] val timeoutDuration: FiniteDuration = Duration(10, TimeUnit.SECONDS)
   private[this] implicit val timeout = Timeout(timeoutDuration)

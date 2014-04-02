@@ -8,15 +8,12 @@ import scala.concurrent.duration.Duration
 import athena.TestData._
 import akka.actor.ActorSystem
 import akka.event.Logging
+import athena.AthenaTest
 
-class SessionSpec extends WordSpec with Matchers {
+class SessionSpec extends WordSpec with AthenaTest with Matchers {
 
   "A Session" should {
     "execute a query" in {
-
-      implicit val system = ActorSystem("test-system")
-      val log = Logging.getLogger(system, this.getClass)
-
       val session = Session(Hosts, Port)
 
       try {
