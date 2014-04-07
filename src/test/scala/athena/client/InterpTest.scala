@@ -25,7 +25,7 @@ class InterpTest extends WordSpec with AthenaTest {
 
       val id = 1745
       val foo = Await.result(
-        cql"select * from testks.users where user_id = $id".as[(Long, String)].stream.run(Iteratee.getChunks),
+        cql"select * from testks.users where user_id = $id".as[(Long, String)].execute.run(Iteratee.getChunks),
         Duration.Inf
       )
 

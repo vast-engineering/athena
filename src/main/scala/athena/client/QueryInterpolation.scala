@@ -21,28 +21,39 @@ object QueryInterpolation {
   }
 
   implicit class QueryContext(val s: StringContext) extends AnyVal {
+
     def cql(paramGenerators: ParamGenerator[_]*) = {
       val params = paramGenerators.map(_.toParam)
       val query = s.parts.mkString("?")
       new InterpolatedQuery(query, params)
     }
-  }
 
-  implicit class SimpleQuery(val q: String) extends AnyVal {
-    def toQuery[A, B](implicit rw: RowWriter[A], rr: RowReader[B], ec: ExecutionContext): A => StatementRunner[CvResult[B]] = {
-      a =>
-        StatementRunner[CvResult[B]] { session =>
-          session.executeStream(q, rw.write(a)) &> Enumeratee.map(rr.read)
-        }
+    def cqlu(paramGenerators: ParamGenerator[_]*) = {
+      val params = paramGenerators.map(_.toParam)
+      val query = s.parts.mkString("?")
+      StatementRunner.unitRunner(query, params)
     }
   }
 
-  class InterpolatedQuery private[QueryInterpolation] (query: String, args: Seq[CValue])  {
-    def as[A](implicit rr: RowReader[A], ec: ExecutionContext): StatementRunner[CvResult[A]] = StatementRunner[CvResult[A]] { session =>
-      session.executeStream(query, args) &> Enumeratee.map(rr.read)
+  implicit class SimpleQuery(val q: String) extends AnyVal {
+
+    def asQuery[A, B](implicit rw: RowWriter[A], rr: RowReader[B]): A => StatementRunner[Enumerator[CvResult[B]]] = {
+      a => StatementRunner.streamRunner(q, rw.write(a))(rr)
+    }
+
+    def asUpdate[A](implicit rw: RowWriter[A]): A => StatementRunner[Future[Unit]] = {
+      a => StatementRunner.unitRunner(q, rw.write(a))
+    }
+  }
+
+  class InterpolatedQuery private[QueryInterpolation] (query: String, args: Seq[CValue]) {
+    def as[A](implicit rr: RowReader[A]): StatementRunner[Enumerator[CvResult[A]]] = {
+      StatementRunner.streamRunner(query, args)(rr)
     }
   }
 
 }
+
+
 
 

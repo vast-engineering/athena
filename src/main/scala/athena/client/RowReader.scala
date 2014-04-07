@@ -1,10 +1,14 @@
 package athena.client
 
 import athena.data._
+import scala.annotation.implicitNotFound
 
 /**
  * A typeclass defining instances that know how to convert a single row from a Cassandra result into a type T
  */
+@implicitNotFound(
+  "An implicit instance of RowReader could not be found for the type ${T}. If T is a scalar type, ensure that a Reads is available for it. If it's a Tuple, ensure that a Reads is available for each member."
+)
 trait RowReader[T] { self =>
   def read(cvalue: Row): CvResult[T]
 
@@ -60,6 +64,8 @@ object RowReader {
   import shapeless.Nat._0
 
   def read[A <: Product, B](f: B => A)(implicit r: RowReader[B]): RowReader[A] = r.map(f)
+
+  implicit val unitReads: RowReader[Unit] = RowReader[Unit] { row => CvSuccess(()) }
 
   implicit def tupleReads[T <: Product, L <: HList](implicit tupler: TuplerAux[L, T], hlr: IndexedRowReader[L, _0]): RowReader[T] =
     hlr.map(l => tupler(l))
