@@ -11,6 +11,7 @@ import athena.Responses.Rows
 import athena.{AthenaTest, Athena}
 
 import athena.TestData._
+import akka.actor.ActorRef
 
 class ConnectionActorSpec extends WordSpec with AthenaTest with Matchers {
 
@@ -19,22 +20,15 @@ class ConnectionActorSpec extends WordSpec with AthenaTest with Matchers {
   "A ConnectionActor" when {
     "uninitialized" should {
       "start up properly" in {
-        within(10 seconds) {
-          IO(Athena) ! Athena.Connect(hostAddress, Port, None)
-          expectMsgType[Athena.Connected]
+        withConnection(hostAddress) { connection =>
+
         }
       }
     }
 
     "connected" should {
-      val connectionActor = within(10 seconds) {
-        IO(Athena) ! Athena.Connect(hostAddress, Port, None)
-        expectMsgType[Athena.Connected]
-        lastSender
-      }
-
       "execute a query" in {
-        within(10 seconds) {
+        withConnection(hostAddress) { connectionActor =>
           val request = SimpleStatement("select * from testks.users")
           connectionActor ! request
           val rows = expectMsgType[Rows]
@@ -43,7 +37,7 @@ class ConnectionActorSpec extends WordSpec with AthenaTest with Matchers {
       }
 
       "properly page results" in {
-        within(10 seconds) {
+        withConnection(hostAddress) { connectionActor =>
           val request = SimpleStatement("select * from testks.users", fetchSize = Some(1))
           connectionActor ! request
           val rows = expectMsgType[Rows]
@@ -58,14 +52,8 @@ class ConnectionActorSpec extends WordSpec with AthenaTest with Matchers {
     }
 
     "connected with a keyspace" should {
-      val keyspaceConnection = within(10 seconds) {
-        IO(Athena) ! Athena.Connect(hostAddress, Port, Some("testks"))
-        expectMsgType[Athena.Connected]
-        lastSender
-      }
-
       "execute a query" in {
-        within(10 seconds) {
+        withConnection(hostAddress, Some("testks")) { keyspaceConnection =>
           val request = SimpleStatement("select * from users")
           keyspaceConnection ! request
           val rows = expectMsgType[Rows]
@@ -74,7 +62,7 @@ class ConnectionActorSpec extends WordSpec with AthenaTest with Matchers {
       }
 
       "properly page results" in {
-        within(10 seconds) {
+        withConnection(hostAddress, Some("testks")) { keyspaceConnection =>
           val request = SimpleStatement("select * from users", fetchSize = Some(1))
           keyspaceConnection ! request
           val rows = expectMsgType[Rows]

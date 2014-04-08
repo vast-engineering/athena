@@ -30,6 +30,11 @@ object Responses {
   case class Timedout(request: AthenaRequest) extends FailureResponse
 
   /**
+   * Signals that a request was unable to execute on any of the hosts in the cluster.
+   */
+  case class NoHostsAvailable(request: AthenaRequest, errors: Map[InetAddress, AthenaResponse]) extends FailureResponse
+
+  /**
    * Signals that a request could not be sent due to a connection problem
    */
   case class ConnectionUnavailable(request: AthenaRequest, errors: Map[InetAddress, Any] = Map.empty) extends FailureResponse

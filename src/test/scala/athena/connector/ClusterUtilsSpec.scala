@@ -23,15 +23,11 @@ class ClusterUtilsSpec extends WordSpec with AthenaTest with Matchers with Clust
 
   "The cluster utils" should {
     "get the cluster info" in {
-      val pipeline = within(timeoutDuration) {
-        IO(Athena) ! Athena.NodeConnectorSetup(host.getHostAddress, Port, Some("testks"), None)
-        expectMsgType[Athena.NodeConnectorInfo]
-        expectMsgType[Athena.NodeConnected]
-        pipelining.queryPipeline(lastSender)
+      withClusterConnection(Hosts) { connector =>
+        val pipeline = pipelining.queryPipeline(connector)
+        val res = Await.result(updateClusterInfo(host, pipeline), timeoutDuration)
+        log.debug("Cluster info - {}", res)
       }
-
-      val res = Await.result(updateClusterInfo(host, pipeline), timeoutDuration)
-      log.debug("Cluster info - {}", res)
     }
   }
 

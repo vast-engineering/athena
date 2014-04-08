@@ -26,7 +26,7 @@ private[connector] class CloseActor(connection: ActorRef, closeCmd: Athena.Close
       context.stop(self)
 
     case ReceiveTimeout =>
-      log.warning("Connection actor did not close within specified timeout interval. Killing actor.")
+      log.warning("Connection actor did not terminate within specified timeout interval. Killing actor.")
       context.unwatch(connection)
       context.stop(connection)
       context.stop(self)

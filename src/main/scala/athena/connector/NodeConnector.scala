@@ -403,10 +403,14 @@ private[athena] object NodeConnector {
       connection ! req
     }
 
+    def sendResponse(r: AthenaResponse) {
+      respondTo.tell(r, context.parent)
+    }
+
     def receive: Actor.Receive = {
       case resp: AthenaResponse =>
         //log.debug("Delivering {} for {}", resp, req)
-        respondTo ! resp
+        sendResponse(resp)
 
         //notify the parent if the request failed - they should close the connection
         if(resp.isFailure) {
@@ -415,11 +419,11 @@ private[athena] object NodeConnector {
         context.stop(self)
 
       case Terminated(`connection`) ⇒
-        respondTo ! Responses.RequestFailed(req)
+        sendResponse(Responses.RequestFailed(req))
         context.stop(self)
 
       case ReceiveTimeout =>
-        respondTo ! Responses.Timedout(req)
+        sendResponse(Responses.Timedout(req))
         notifyParent()
         context.stop(self)
     }

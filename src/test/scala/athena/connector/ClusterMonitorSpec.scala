@@ -3,7 +3,7 @@ package athena.connector
 import akka.testkit.{TestActorRef, ImplicitSender, DefaultTimeout, TestKit}
 import akka.actor.ActorSystem
 import org.scalatest.{WordSpec, BeforeAndAfterAll, Matchers, WordSpecLike}
-import athena.{AthenaTest, ClusterConnectorSettings}
+import athena.{Athena, AthenaTest, ClusterConnectorSettings}
 import scala.concurrent.duration._
 import athena.connector.ClusterInfo.ClusterMetadata
 
@@ -21,13 +21,11 @@ class ClusterMonitorSpec extends WordSpec with AthenaTest with Matchers {
 
   "The cluster monitor actor" should {
     "connect to the cluster" in {
-      TestActorRef(new ClusterMonitorActor(self, Hosts, Port, settings))
-      within(60 seconds) {
-        expectMsg(ClusterReconnected)
-        expectMsgType[ClusterMetadata]
-      }
+      val ref = TestActorRef(new ClusterMonitorActor(self, Hosts, Port, settings))
+      expectMsg(ClusterReconnected)
+      expectMsgType[ClusterMetadata]
+      akka.pattern.gracefulStop(ref, timeout.duration, Athena.Close)
     }
   }
-
 
 }

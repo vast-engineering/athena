@@ -24,9 +24,7 @@ class SessionSpec extends WordSpec with AthenaTest with Matchers {
         assert(!rows.isEmpty)
       } finally {
         session.close()
-        system.shutdown()
       }
-
     }
   }
 

@@ -1,24 +1,34 @@
 package athena.connector
 
-import athena.{Responses, ClusterConnectorSettings, Athena}
+import athena.{Errors, Responses, ClusterConnectorSettings, Athena}
 import akka.actor._
 import akka.pattern._
 import athena.Requests.AthenaRequest
-import athena.Responses.AthenaResponse
+import athena.Responses._
 import scala.concurrent.duration.Duration
 import athena.Athena._
 import java.net.{InetSocketAddress, InetAddress}
 import akka.event.LoggingAdapter
 import athena.connector.ClusterMonitorActor.{ClusterUnreachable, ClusterReconnected}
 import athena.Athena.NodeDisconnected
-import athena.Responses.RequestFailed
 import scala.Some
 import athena.Athena.NodeConnected
+import akka.actor.Terminated
+import athena.connector.ClusterInfo.ClusterMetadata
+import java.util.concurrent.TimeUnit
+import athena.Athena.NodeDisconnected
+import athena.Responses.RequestFailed
+import scala.Some
+import athena.Athena.ClusterConnectorSetup
+import athena.Athena.NodeConnected
+import athena.Athena.GeneralError
+import athena.Athena.ClusterFailed
+import athena.Athena.NodeFailed
 import athena.Responses.ConnectionUnavailable
 import akka.actor.Terminated
 import athena.Responses.Timedout
 import athena.connector.ClusterInfo.ClusterMetadata
-import java.util.concurrent.TimeUnit
+import spray.util.LoggingContext
 
 private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnectorSetup) extends Actor with ActorLogging {
 
@@ -59,6 +69,23 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
 
     case cmd: Athena.CloseCommand =>
       context.become(closing(cmd, Set(sender())))
+
+    case newMeta: ClusterMetadata =>
+      mergeMetadata(newMeta)
+
+    case NodeConnected(address) =>
+      //NodeConnected and NodeDisconnected are sent by our pools
+      // back to us to let us know their state.
+      hostUp(address)
+
+    case x@NodeDisconnected(address) =>
+      //let the monitor know - in case it hasn't disconnected yet
+      clusterMonitor ! x
+      hostDown(address)
+
+    case HostStatusChanged(addr, isUp) =>
+      //this is sent from the cluster monitor when the cluster signals a node is available
+      togglePool(addr, isUp)
 
     case ClusterUnreachable =>
       //let our commander know
@@ -158,26 +185,11 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
 
     val behavior: Receive = {
       case req: AthenaRequest =>
+        val queryPlan = routingPlan.roundRobinPlan(liveHosts)
         context.actorOf(
-          props = RequestActor.props(req, sender(), routingPlan.generatePlan(req, liveHosts)(log), defaultRequestTimeout),
+          props = RequestActor.props(req, sender(), queryPlan, defaultRequestTimeout),
           name = "request-actor-" + actorNameIndex.next()
         )
-
-      case newMeta: ClusterMetadata =>
-        mergeMetadata(newMeta)
-
-      case NodeConnected(addr) =>
-        hostUp(addr)
-
-      case x@NodeDisconnected(addr) =>
-        //let the monitor know - in case it hasn't disconnected yet
-        clusterMonitor ! x
-        hostDown(addr)
-
-      case HostStatusChanged(addr, isUp) =>
-        //this is sent from the cluster monitor when the cluster signals a node is available
-        togglePool(addr, isUp)
-
     }
 
     behavior orElse defaultBehavior
@@ -187,7 +199,7 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
 
     context.setReceiveTimeout(settings.localNodeSettings.closeTimeout)
 
-    log.info("Closing cluster connector with {} live pools.", pools.size)
+    log.info("Closing cluster connector {} with {} live pools.", clusterMetadata.name.getOrElse("Unknown"), pools.size)
 
     def step(closeActors: Set[ActorRef], commanders: Set[ActorRef]): Receive = {
 
@@ -219,9 +231,10 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
       }
     }
 
-    val closeActors =  pools.values.map { pool =>
-      context.watch(closePool(pool))
-    }.toSet
+    val toClose = pools.values.toSet + clusterMonitor
+    val closeActors = toClose.map { pool =>
+      context.watch(closeActor(pool))
+    }
 
     liveHosts = IndexedSeq.empty
     pools = Map.empty
@@ -288,14 +301,15 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
     pools = pools - host
     liveHosts = liveHosts.filterNot(_.addr == host)
 
-    closePool(pool)
+    closeActor(pool)
   }
 
-  private def closePool(pool: ActorRef): ActorRef = {
+  private def closeActor(pool: ActorRef): ActorRef = {
     context.unwatch(pool)
     context.actorOf(CloseActor.props(pool, Athena.Close, settings.localNodeSettings.closeTimeout))
   }
 
+  //ingest the new cluster data sent by the monitor actor and adjust our pools accordingly.
   private def mergeMetadata(newMeta: ClusterMetadata) {
     //find the set of newly added hosts
     val currentHosts = clusterMetadata.hosts.keySet
@@ -310,6 +324,7 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
     clusterMetadata = newMeta
   }
 
+  //set our status and also let all our listeners know
   private def updateStatus(status: ClusterStatusEvent) {
     currentStatus = status
     statusListeners.foreach(_ ! status)
@@ -328,48 +343,80 @@ private[athena] object ClusterConnector {
   //sent by various partners of this Actor to indicate that the status of a given Host has changed
   private[connector] case class HostStatusChanged(host: InetAddress, isUp: Boolean)
 
-  private class RequestActor(req: AthenaRequest, respondTo: ActorRef, plan: Iterator[ConnectedHost], timeout: Duration) extends Actor with ActorLogging {
+  private class RequestActor(originalRequest: AthenaRequest, respondTo: ActorRef, plan: Iterator[ConnectedHost], timeout: Duration) extends Actor with ActorLogging {
 
-    //
-    // TODO - add retry policy logic
-    //
     context.setReceiveTimeout(timeout)
 
-    var errors: Map[InetAddress, Any] = Map.empty
+    var errors: Map[InetAddress, AthenaResponse] = Map.empty
 
     override def preStart() {
-      attemptRequest()
+      attemptRequest(originalRequest)
     }
 
-    def attemptRequest() {
+    def sendResponse(r: AthenaResponse) {
+      //the response should come from the parent, not us.
+      respondTo.tell(r, context.parent)
+    }
+
+    //The retry count here is intended to model the number of logical query attempts
+    // it shouldn't be incremented due to a transient network error. This is used for things
+    // that are cassandra specific. For example, the strategy we use for a read timeout error
+    // may depend on the number of attempts. A query sent to a node that is unreachable shouldn't count
+    // against this total.
+    def attemptRequest(request: AthenaRequest, retryCount: Int = 0) {
       if(!plan.hasNext) {
         //out of options here,
-        respondTo ! ConnectionUnavailable(req, errors)
+        //note - this uses the original request, not the updated one in 'request' that
+        // may have been copied and updated by the retry logic.
+        sendResponse(NoHostsAvailable(originalRequest, errors))
         context.stop(self)
       } else {
         val host = plan.next()
         log.debug("Using host {} for request.", host)
-        host.connection ! req
+        host.connection ! request
 
         context.become {
+
+          case x if sender() != host.connection =>
+            val s = sender()
+            log.warning("Received response from an unexpected host. This could be due to a previous timeout.")
+            log.warning("Discarding response - {}", x)
+
+          case x@ErrorResponse(_, Errors.OverloadedError(msg, errorHost)) =>
+            errors = errors.updated(host.addr, x)
+            log.warning("Host is {} overloaded, trying next host. Message - {}", host, msg)
+            //note this does not increment the retry count on purpose - it's not an
+            // error with the query or state of the cluster itself
+            attemptRequest(request, retryCount)
+
+          case x@ErrorResponse(_, Errors.IsBootstrappingError(msg, errorHost)) =>
+            log.error("Query sent to {} but it is bootstrapping. This shouldn't happen but trying next host. Message - {}", errorHost, msg)
+            //note this does not increment the retry count on purpose - it's not an
+            // error with the query or state of the cluster itself
+            attemptRequest(request, retryCount)
+
+          //TODO: handle read and write timeout errors
+          // read and write timeouts should increment the retryCount if they fail.
+
+          case ReceiveTimeout =>
+            log.warning("Request to host {} timed out before response received.")
+            errors = errors.updated(host.addr, Timedout(originalRequest))
+            attemptRequest(request, retryCount)
+
           case resp: AthenaResponse =>
             if(resp.isFailure) {
+              //try the next host
               errors = errors.updated(host.addr, resp)
-              attemptRequest()              
+              attemptRequest(request, retryCount)
             } else {
-              respondTo ! resp
+              sendResponse(resp)
               context.stop(self)              
             }
 
-          case ReceiveTimeout =>
-            log.warning("Request timed out.")
-            errors = errors.updated(host.addr, Timedout(req))
-            attemptRequest()
-
           case x =>
             log.error("Received unknown response to request - {}", x)
-            errors = errors.updated(host.addr, x)
-            attemptRequest()
+            sendResponse(RequestFailed(originalRequest))
+            context.stop(self)
         }
 
       }
@@ -378,7 +425,7 @@ private[athena] object ClusterConnector {
     def receive: Receive = {
       case x =>
         log.error("Should not happen - received message {}.")
-        respondTo ! RequestFailed(req)
+        respondTo ! RequestFailed(originalRequest)
         context.stop(self)
     }
   }
@@ -396,7 +443,7 @@ private[athena] object ClusterConnector {
 
     var index = 0
 
-    def generatePlan(req: AthenaRequest, state: IndexedSeq[ConnectedHost])(implicit log: LoggingAdapter): Iterator[ConnectedHost] = {
+    def roundRobinPlan(state: IndexedSeq[ConnectedHost])(implicit log: LoggingContext): Iterator[ConnectedHost] = {
 
       val startIndex = index
 

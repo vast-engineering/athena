@@ -19,52 +19,44 @@ class NodeConnectorSpec extends WordSpec with AthenaTest with Matchers {
 
   val hostAddress = Hosts.head.getHostAddress
 
-  private def openConnection(keyspace: Option[String] = None): ActorRef = {
-    within(10 seconds) {
-      IO(Athena) ! Athena.NodeConnectorSetup(hostAddress, Port, keyspace, None)
-      expectMsgType[Athena.NodeConnectorInfo]
-      val connection = lastSender
-      expectMsgType[Athena.NodeConnected]
-      connection
-    }
-  }
-
   "A NodeConnector" should {
     "start up properly" in {
-      openConnection()
+      withNodeConnection(hostAddress) { connector =>
+      }
     }
 
     "execute a query" in {
-      val connector = openConnection()
+      withNodeConnection(hostAddress) { connector =>
+        val request = SimpleStatement("select * from testks.users")
+        connector ! request
+        val rows = expectMsgType[Rows]
+        val columnDefs = rows.columnDefs
 
-      val request = SimpleStatement("select * from testks.users")
-      connector ! request
-      val rows = expectMsgType[Rows]
-      val columnDefs = rows.columnDefs
-
-      rows.data.foreach { row =>
-        log.debug("Row - ")
-        row.zip(columnDefs).foreach { zipped =>
-          val columnDef = zipped._2
-          val value = CValue.parse(columnDef.dataType, zipped._1)
-          log.debug(s"   ${columnDef.name} - ${columnDef.dataType.name} - $value")
+        rows.data.foreach { row =>
+          log.debug("Row - ")
+          row.zip(columnDefs).foreach { zipped =>
+            val columnDef = zipped._2
+            val value = CValue.parse(columnDef.dataType, zipped._1)
+            log.debug(s"   ${columnDef.name} - ${columnDef.dataType.name} - $value")
+          }
         }
       }
     }
 
     "use an explicit keyspace" in {
-      val connector = openConnection(Some("testks"))
-      val request = SimpleStatement("select * from users")
-      connector ! request
-      val rows = expectMsgType[Rows]
-      val columnDefs = rows.columnDefs
+      withNodeConnection(hostAddress, Some("testks")) { connector =>
+        val request = SimpleStatement("select * from users")
+        connector ! request
+        val rows = expectMsgType[Rows]
+        val columnDefs = rows.columnDefs
 
-      rows.data.foreach { row =>
-        log.debug("Row - ")
-        row.zip(columnDefs).foreach { zipped =>
-          val columnDef = zipped._2
-          val value = CValue.parse(columnDef.dataType, zipped._1)
-          log.debug(s"   ${columnDef.name} - ${columnDef.dataType.name} - $value")
+        rows.data.foreach { row =>
+          log.debug("Row - ")
+          row.zip(columnDefs).foreach { zipped =>
+            val columnDef = zipped._2
+            val value = CValue.parse(columnDef.dataType, zipped._1)
+            log.debug(s"   ${columnDef.name} - ${columnDef.dataType.name} - $value")
+          }
         }
       }
     }

@@ -22,23 +22,25 @@ class PipelineSpec extends WordSpec with AthenaTest with Matchers {
 
   "A pipeline" when {
     "using a raw connection" should {
-      val pipeline = within(timeoutDuration) {
-        IO(Athena) ! Athena.Connect(Hosts.head.getHostAddress, Port, Some("testks"), None)
-        expectMsgType[Athena.Connected]
-        pipelining.queryPipeline(lastSender)
-      }
       "execute a simple query" in {
-        simpleQuery(pipeline)
+        withConnection(Hosts.head.getHostAddress, Some("testks")) { connection =>
+          simpleQuery(pipelining.queryPipeline(connection))
+        }
+
       }
     }
     "using a node connection pool" should {
-      val connection = within(timeoutDuration) {
-        IO(Athena) ! Athena.NodeConnectorSetup(Hosts.head.getHostAddress, Port, Some("testks"), None)
-        expectMsgType[Athena.NodeConnectorInfo]
-        pipelining.queryPipeline(lastSender)
-      }
       "execute a simple query" in {
-        simpleQuery(connection)
+        withNodeConnection(Hosts.head.getHostAddress, Some("testks")) { connection =>
+          simpleQuery(pipelining.queryPipeline(connection))
+        }
+      }
+    }
+    "using a cluster connection" should {
+      "execute a simple query" in {
+        withClusterConnection(Hosts, Some("testks")) { connection =>
+          simpleQuery(pipelining.queryPipeline(connection))
+        }
       }
     }
   }
@@ -49,6 +51,7 @@ class PipelineSpec extends WordSpec with AthenaTest with Matchers {
     results.foreach { row =>
         log.debug(s"${row.values.mkString(", ")}")
     }
+    assert(!results.isEmpty)
   }
 
 

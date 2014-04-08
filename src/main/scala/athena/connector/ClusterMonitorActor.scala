@@ -35,6 +35,14 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
 
   private[this] val routingPolicy = new ReconnectionPolicy()
 
+  private[this] val defaultBehavior: Receive = {
+
+    case cmd: Athena.CloseCommand =>
+      sender() ! cmd.event
+      context.stop(self)
+
+  }
+
   def receive = reconnect(seedHosts.map(a => a -> HostInfo(a)).toMap, true)
 
   def unconnected(hosts: Map[InetAddress, HostInfo]): Receive = {
@@ -51,6 +59,11 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
     {
       case 'reconnect =>
         context.become(reconnect(hosts, true))
+
+      case cmd: Athena.CloseCommand =>
+        sender() ! cmd.event
+        context.stop(self)
+
       case x =>
         log.warning("Received unknown message while unconnected. This shouldn't happen. {}", x)
     }
@@ -95,6 +108,11 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
           case ReceiveTimeout =>
             log.debug("Connection attempt to host {} timed out, trying next host.", connectionHosts.head.addr)
             context.become(tryConnect(connectionHosts.tail))
+
+          case cmd: Athena.CloseCommand =>
+            sender() ! cmd.event
+            context.stop(self)
+
         }
       }
     }
@@ -133,6 +151,22 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
         context.unwatch(connection)
         context.actorOf(CloseActor.props(connection, Athena.Close, settings.localNodeSettings.closeTimeout))
         context.become(reconnect(hosts))
+
+      case cmd: Athena.CloseCommand =>
+        val closeCommander = sender()
+        connection ! cmd
+        context.setReceiveTimeout(Duration(10, TimeUnit.SECONDS))
+        context.become {
+          case Terminated(`connection`) =>
+            closeCommander ! cmd.event
+            context.stop(self)
+
+          case ReceiveTimeout =>
+            log.warning("Cluster connector timed out waiting for connection to close. Killing it.")
+            context.stop(connection)
+            closeCommander ! cmd.event
+            context.stop(self)
+        }
 
       case evt: ClusterEvent =>
         log.debug("Got cluster event {}", evt)

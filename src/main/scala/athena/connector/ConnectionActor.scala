@@ -354,7 +354,7 @@ private[athena] class ConnectionActor(connectCommander: ActorRef, connect: Athen
 
         state {
           case req: AthenaRequest =>
-            val ctx = ConnectionRequestContext(req, sender)
+            val ctx = ConnectionRequestContext(req, sender())
             if(writesEnabled) {
               sendRequest(ctx)
               stay()
@@ -389,7 +389,7 @@ private[athena] class ConnectionActor(connectCommander: ActorRef, connect: Athen
 
           case Athena.Abort =>
             log.debug("Aborting connection.")
-            abort(Set(sender), queued)
+            abort(Set(sender()), queued)
 
           case Athena.Close =>
             //kill any queued requests, but attempt to finish processing outstanding requests
@@ -397,11 +397,11 @@ private[athena] class ConnectionActor(connectCommander: ActorRef, connect: Athen
             queued.foreach { ctx =>
               ctx.respondTo ! RequestFailed(ctx.request)
             }
-            waitForOutstandingRequests(Set(sender))
+            cleanlyClose(Set(sender()))
         }
       }
 
-      def waitForOutstandingRequests(closeCommanders: Set[ActorRef]): State = {
+      def cleanlyClose(closeCommanders: Set[ActorRef]): State = {
 
         def closeDone: Boolean = requestTracker.requests.isEmpty
 
@@ -440,7 +440,7 @@ private[athena] class ConnectionActor(connectCommander: ActorRef, connect: Athen
               stop()
 
             case Athena.Close =>
-              waitForOutstandingRequests(closeCommanders + sender)
+              cleanlyClose(closeCommanders + sender)
 
             case Athena.Abort =>
               abort(closeCommanders + sender)

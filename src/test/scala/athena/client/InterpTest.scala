@@ -30,6 +30,7 @@ class InterpTest extends WordSpec with AthenaTest {
       )
 
       log.info("Finished query with result {}", foo)
+      session.close()
     }
   }
 
