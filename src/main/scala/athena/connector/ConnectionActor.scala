@@ -44,7 +44,7 @@ import athena.connector.CassandraResponses.ClusterEvent
  *
  * @author David Pratt (dpratt@vast.com)
  */
-class ConnectionActor(connectCommander: ActorRef, connect: Athena.Connect,
+private[athena] class ConnectionActor(connectCommander: ActorRef, connect: Athena.Connect,
                       settings: ConnectionSettings)
   extends Actor with ActorLogging {
 
@@ -59,6 +59,9 @@ class ConnectionActor(connectCommander: ActorRef, connect: Athena.Connect,
   //so a restart would transparently re-open that connection. That decision should be
   //up to the client of this actor.
   override def supervisorStrategy = SupervisorStrategy.stoppingStrategy
+
+  //death pact with commander
+  context.watch(connectCommander)
 
   def receive = openTcpConnection()
 

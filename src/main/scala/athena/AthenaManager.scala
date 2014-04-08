@@ -34,12 +34,13 @@ private[athena] class AthenaManager(globalSettings: AthenaExt#Settings) extends 
       sender.tell(Athena.NodeConnectorInfo(connector, setup), connector)
 
     case setup: ClusterConnectorSetup =>
+      val connectCommander = sender()
       val normal = setup.normalized
       val connector = context.actorOf(
-        props = ClusterConnector.props(sender, normal.initialHosts, normal.port, normal.keyspace, normal.settings.get),
+        props = ClusterConnector.props(connectCommander, normal),
         name = "cluster-connector-" + clusterConnectorCounter.next()
       )
-      sender.tell(Athena.ClusterConnectorInfo(connector, setup), connector)
+      connectCommander.tell(Athena.ClusterConnectorInfo(connector, setup), connector)
   }
 
 }

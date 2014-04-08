@@ -20,20 +20,18 @@ import athena.Responses.Timedout
 import athena.connector.ClusterInfo.ClusterMetadata
 import java.util.concurrent.TimeUnit
 
-class ClusterConnector(commander: ActorRef,
-                       initialHosts: Set[InetAddress],
-                       port: Int,
-                       keyspace: Option[String],
-                       settings: ClusterConnectorSettings) extends Actor with ActorLogging {
+private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnectorSetup) extends Actor with ActorLogging {
 
   import ClusterConnector._
 
   import context.dispatcher
 
+  private[this] val settings = setup.settings.get
+
   //create and sign a death pact with the monitor - we need it to operate
   private[this] val clusterMonitor = context.watch {
     context.actorOf(
-      props = Props(new ClusterMonitorActor(self, initialHosts, port, settings)),
+      props = Props(new ClusterMonitorActor(self, setup.initialHosts, setup.port, settings)),
       name = "cluster-monitor"
     )
   }
@@ -50,24 +48,50 @@ class ClusterConnector(commander: ActorRef,
 
   private[this] val actorNameIndex = Iterator from 0
 
+  private[this] var statusListeners: Set[ActorRef] = Set(commander)
+
+  private[this] var currentStatus: ClusterStatusEvent = ClusterDisconnected
+
   private[this] val defaultBehavior: Receive = {
     case req: AthenaRequest =>
       log.warning("Rejecting request due to default behavior")
       sender ! ConnectionUnavailable(req)
 
     case cmd: Athena.CloseCommand =>
-      context.become(closing(cmd, Set(sender)))
+      context.become(closing(cmd, Set(sender())))
 
     case ClusterUnreachable =>
       //let our commander know
       pools.values.foreach(_ ! Disconnect)
-      commander ! ClusterDisconnected
+      updateStatus(ClusterDisconnected)
 
     case ClusterReconnected =>
       //this is sent by the cluster monitor after it has been disconnected from every host in the cluster
       //and has subsequently reconnected - we should tell all our pools to immediately attempt a reconnect
       pools.values.foreach(_ ! Reconnect)
-      commander ! ClusterConnected
+      updateStatus(ClusterConnected)
+
+      //Leave this commented out for now - this doesn't work when the cluster connector is created
+      //externally and handed off (for example, the way Session does it)
+      //this means we can theoretically 'leak' cluster connections, but it doesn't really happen in practice.
+      //what we want is a way for a client to relinquish being the commander and hand it off to somebody else.
+//    case Terminated(`commander`) =>
+//      log.warning("Cluster commander unexpextedly terminated. Shutting down as well.")
+//      context.become(closing(Athena.Abort, statusListeners))
+
+    case Terminated(listener) if statusListeners.contains(listener) =>
+      statusListeners = statusListeners - listener
+
+    case AddClusterStatusListener =>
+      val listener = sender()
+      listener ! currentStatus
+      context.watch(listener)
+      statusListeners = statusListeners + listener
+
+    case RemoveClusterStatusListener =>
+      val listener = sender()
+      context.unwatch(listener)
+      statusListeners = statusListeners - listener
 
   }
 
@@ -84,6 +108,11 @@ class ClusterConnector(commander: ActorRef,
     val behavior: Receive = {
       case ClusterReconnected =>
         context.become(initializing)
+
+      case ClusterUnreachable if setup.failOnInit =>
+        updateStatus(ClusterFailed(GeneralError("Cluster is unreachable.")))
+        context.stop(self) //boom
+
     }
 
     behavior orElse defaultBehavior
@@ -98,6 +127,8 @@ class ClusterConnector(commander: ActorRef,
 
       case newMeta: ClusterMetadata =>
         //we should receive cluster metadata from the monitor actor
+        //merging this metadata will cause our pools to be created and
+        //connection attempts to fire.
         mergeMetadata(newMeta)
 
       case NodeConnected(addr) =>
@@ -107,9 +138,9 @@ class ClusterConnector(commander: ActorRef,
 
       case NodeFailed(addr, error) =>
         //this is a fatal error - we cannot do anything with this
-        commander ! ClusterFailed(error)
+        updateStatus(ClusterFailed(error))
         //now shut down
-        context.become(closing(Athena.Abort, Set()))
+        context.become(closing(Athena.Abort, Set(commander)))
 
     }
 
@@ -121,14 +152,14 @@ class ClusterConnector(commander: ActorRef,
     log.info("Successfully connected to cassandra cluster '{}'", clusterMetadata.name.getOrElse("Unknown"))
     log.debug("Cluster connector running with hosts {}", pools.keySet)
 
-    commander ! ClusterConnected
+    updateStatus(ClusterConnected)
 
-    context.setReceiveTimeout(Duration(10, TimeUnit.SECONDS))
+    context.setReceiveTimeout(Duration.Inf)
 
     val behavior: Receive = {
       case req: AthenaRequest =>
         context.actorOf(
-          props = RequestActor.props(req, sender, routingPlan.generatePlan(req, liveHosts)(log), defaultRequestTimeout),
+          props = RequestActor.props(req, sender(), routingPlan.generatePlan(req, liveHosts)(log), defaultRequestTimeout),
           name = "request-actor-" + actorNameIndex.next()
         )
 
@@ -243,7 +274,7 @@ class ClusterConnector(commander: ActorRef,
     }
     val pool = context.watch {
       context.actorOf(
-        props = NodeConnector.props(self, new InetSocketAddress(host, port), keyspace, settings.localNodeSettings),
+        props = NodeConnector.props(self, new InetSocketAddress(host, setup.port), setup.keyspace, settings.localNodeSettings),
         name = "node-connector-" + actorNameIndex.next() + "-" + host.getHostAddress
       )
     }
@@ -279,16 +310,17 @@ class ClusterConnector(commander: ActorRef,
     clusterMetadata = newMeta
   }
 
+  private def updateStatus(status: ClusterStatusEvent) {
+    currentStatus = status
+    statusListeners.foreach(_ ! status)
+  }
+
 }
 
-object ClusterConnector {
+private[athena] object ClusterConnector {
 
-  def props(commander: ActorRef,
-            initialHosts: Set[InetAddress],
-            port: Int,
-            keyspace: Option[String],
-            settings: ClusterConnectorSettings): Props = {
-    Props(new ClusterConnector(commander, initialHosts, port, keyspace, settings))
+  def props(commander: ActorRef, setup: ClusterConnectorSetup): Props = {
+    Props(new ClusterConnector(commander, setup))
   }
 
   private case class ConnectedHost(addr: InetAddress, connection: ActorRef)

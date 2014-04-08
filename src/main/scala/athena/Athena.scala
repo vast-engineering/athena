@@ -73,7 +73,7 @@ object Athena extends ExtensionKey[AthenaExt] {
         copy(settings = Some(NodeConnectorSettings(actorSystem)))
       }
   }
-  
+
   object NodeConnectorSetup {
     def apply(host: String, port: Int,
               keyspace: Option[String],
@@ -89,14 +89,19 @@ object Athena extends ExtensionKey[AthenaExt] {
    * @param port the port used to connect
    * @param keyspace The optional keyspace to use for connections in the cluster.
    * @param settings Settings for the cluster - if this is not defined, default settings read from the ActorSystem's config will be used.
+   * @param failOnInit If true, the cluster conntection will fail at initialization time if no hosts are reachable. If false,
+   *                   it will continue to attempt reconnects.
    */
   case class ClusterConnectorSetup(initialHosts: Set[InetAddress], port: Int, keyspace: Option[String],
-                                   settings: Option[ClusterConnectorSettings] = None) extends ConnectionCreationCommand {
+                                   settings: Option[ClusterConnectorSettings] = None, failOnInit: Boolean = false) extends ConnectionCreationCommand {
     private[athena] def normalized(implicit refFactory: ActorRefFactory) =
       if (settings.isDefined) this
       else copy(settings = Some(ClusterConnectorSettings(actorSystem)))
   }
 
+  //Send to a cluster connector actor to monitor (or stop monitoring) it's state
+  case object AddClusterStatusListener extends Command
+  case object RemoveClusterStatusListener extends Command
 
   /**
    * A command suitable for routing to a connection, host or cluster
@@ -159,7 +164,7 @@ object Athena extends ExtensionKey[AthenaExt] {
   sealed trait ConnectionCreatedEvent extends Event
 
   /**
-   * The connection actor sends this message to the sender of a [[athena.Athena.Connect]]
+   * The connection actor sends this message to the sender of a [[athena.Athena.ClusterConnectorSetup]]
    * command. The connection is characterized by the `remoteAddress`
    * and `localAddress` TCP endpoints.
    */

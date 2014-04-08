@@ -44,9 +44,16 @@ private[athena] class NodeConnector(commander: ActorRef,
     case close: Athena.CloseCommand =>
       log.warning("Unhandled close request to node connector. Shutting down.")
       sender ! close.event
-      context.stop(self)    
+      context.stop(self)
+
+    case Terminated(`commander`) =>
+      log.error("Node connector commander unexpectedly shut down. Terminating.")
+      context.stop(self)
+
   }
 
+  //death pact with our commander
+  context.watch(commander)
 
   override def preStart() = {
     //start in the connecting state
@@ -242,6 +249,10 @@ private[athena] class NodeConnector(commander: ActorRef,
           log.debug("Request completed.")
           val newState = decrementConnection(connection)
           step(newState)
+
+        case Terminated(`commander`) =>
+          log.error("Node connector commander unexpectedly shut down. Terminating.")
+          close(connections.keySet, Athena.Abort, Set())
 
         case cmd: Athena.CloseCommand =>
           close(connections.keySet, cmd, Set(sender))
