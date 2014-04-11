@@ -3,8 +3,8 @@ package athena
 import java.net.InetSocketAddress
 import athena.Athena._
 import Consistency._
-import athena.util.MD5Digest
 import athena.connector.CassandraError
+import akka.util.ByteString
 
 object Errors {
 
@@ -56,7 +56,7 @@ object Errors {
   case class AlreadyExistsError(message: String, keyspace: String, table: String) extends InvalidRequestError {
     def toThrowable: Throwable = new AlreadyExistsException(message, keyspace, table)
   }
-  case class UnpreparedError(message: String, host: InetSocketAddress, statementId: MD5Digest) extends InvalidRequestError {
+  case class UnpreparedError(message: String, host: InetSocketAddress, statementId: ByteString) extends InvalidRequestError {
     def toThrowable: Throwable = new InternalException(s"A prepared query was submitted on %host but was not known of that node; this shouldn't happen, the query should have been re-prepared")
   }
 

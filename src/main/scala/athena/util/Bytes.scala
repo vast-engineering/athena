@@ -3,12 +3,11 @@ package athena.util
 import java.lang.reflect.Constructor
 import akka.util.ByteString
 import scala.util.control.NonFatal
-import com.typesafe.scalalogging.slf4j.Logging
 
 /**
  * Simple utility methods to make working with bytes (blob) easier.
  */
-object Bytes extends Logging {
+object Bytes  {
 
   /**
    * Converts a blob to its CQL hex string representation.
@@ -104,7 +103,6 @@ object Bytes extends Logging {
         Some(ctor.newInstance(0: java.lang.Integer, c.length: java.lang.Integer, c))
       } catch {
         case NonFatal(e) =>
-          logger.debug("Couldn't create fast string instance - {}", e)
           None
       }
     } getOrElse {

@@ -39,9 +39,9 @@ class ClusterConnectorSpec extends WordSpec with AthenaTest with Matchers {
     }
 
     "use an explicit keyspace" in {
-      withClusterConnection(Some("testks")) { connector =>
+      withClusterConnection() { connector =>
 
-        val request = SimpleStatement("select * from users")
+        val request = SimpleStatement("select * from users", keyspace = Some("testks"))
         connector ! request
         val rows = expectMsgType[Rows]
         val columnDefs = rows.columnDefs
@@ -56,5 +56,6 @@ class ClusterConnectorSpec extends WordSpec with AthenaTest with Matchers {
         }
       }
     }
+
   }
 }

@@ -30,14 +30,14 @@ class PipelineSpec extends WordSpec with AthenaTest with Matchers {
     }
     "using a node connection pool" should {
       "execute a simple query" in {
-        withNodeConnection(Some("testks")) { connection =>
+        withNodeConnection() { connection =>
           simpleQuery(pipelining.queryPipeline(connection))
         }
       }
     }
     "using a cluster connection" should {
       "execute a simple query" in {
-        withClusterConnection(Some("testks")) { connection =>
+        withClusterConnection() { connection =>
           simpleQuery(pipelining.queryPipeline(connection))
         }
       }
@@ -45,7 +45,7 @@ class PipelineSpec extends WordSpec with AthenaTest with Matchers {
   }
 
   private def simpleQuery(pipeline: Statement => Enumerator[Row]) {
-    val results = Await.result(pipeline(SimpleStatement("select * from users")).run(Iteratee.getChunks), timeoutDuration)
+    val results = Await.result(pipeline(SimpleStatement("select * from users", keyspace = Some("testks"))).run(Iteratee.getChunks), timeoutDuration)
     log.debug("Query results - ")
     results.foreach { row =>
         log.debug(s"${row.values.mkString(", ")}")

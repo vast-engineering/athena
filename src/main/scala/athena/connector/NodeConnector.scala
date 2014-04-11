@@ -1,20 +1,26 @@
 package athena.connector
 
 import akka.actor._
-import akka.actor.Terminated
 
 import athena.Athena._
-import athena.{NodeConnectorSettings, Responses, Athena}
-import athena.Requests.AthenaRequest
+import athena.{ConnectionSettings, NodeConnectorSettings, Responses, Athena}
+import athena.Requests.{KeyspaceAwareRequest, AthenaRequest}
 import athena.Responses.AthenaResponse
-import athena.Responses.ConnectionUnavailable
-import athena.Athena.NodeDisconnected
-import athena.Athena.NodeConnected
 
 import java.net.InetSocketAddress
 import java.util.concurrent.TimeUnit
 
 import scala.concurrent.duration.{Duration, FiniteDuration}
+import akka.util.{Timeout, ByteString}
+import athena.Athena.NodeDisconnected
+import athena.Athena.NodeConnected
+import athena.Responses.ConnectionUnavailable
+import athena.data.PreparedStatementDef
+import akka.actor.Terminated
+import athena.connector.ConnectionActor.{ConnectionCommandFailed, KeyspaceChanged, SetKeyspace}
+import scala.util.control.NonFatal
+import akka.event.LoggingReceive
+import athena.connector.ClusterConnector.CheckKeyspace
 
 /**
  * Manages a pool of connections to a single Cassandra node. This Actor takes incoming requests and dispatches
@@ -24,8 +30,8 @@ import scala.concurrent.duration.{Duration, FiniteDuration}
  */
 private[athena] class NodeConnector(commander: ActorRef,
                                     remoteAddress: InetSocketAddress,
-                                    keyspace: Option[String],
-                                    settings: NodeConnectorSettings) extends Actor with Stash with ActorLogging {
+                                    settings: NodeConnectorSettings,
+                                    preparedStatementDefs: Map[ByteString, PreparedStatementDef]) extends Actor with Stash with ActorLogging {
 
   //
   // TODO - reap connections below the usage threshold
@@ -36,6 +42,24 @@ private[athena] class NodeConnector(commander: ActorRef,
   import context.dispatcher
 
   private[this] val counter = Iterator from 0
+
+  //private[this] var livePreparedStatements: Map[ByteString, PreparedStatementDef] = preparedStatementDefs
+
+  //A map holding all requests pending until the availability of a connection to the specified keyspace.
+  private[this] var pendingRequests: Map[Option[String], Seq[PendingRequest]] = Map.empty
+
+  //A map of all of our current live connections
+  private[this] var liveConnections: Map[ActorRef, ConnectionStatus] = Map.empty
+
+  //Any children we create that signal errors should not be restarted.
+  override val supervisorStrategy: SupervisorStrategy = SupervisorStrategy.stoppingStrategy
+
+  private[this] implicit val defaultTimeout = if(settings.connectionSettings.requestTimeout.isFinite()) {
+    Timeout(settings.connectionSettings.requestTimeout.length, settings.connectionSettings.requestTimeout.unit)
+  } else {
+    //just use a default timeout of 10 seconds
+    Timeout(10, TimeUnit.SECONDS)
+  }
 
   private val defaultBehavior: Receive = {
     case req: AthenaRequest =>
@@ -55,58 +79,41 @@ private[athena] class NodeConnector(commander: ActorRef,
   //death pact with our commander
   context.watch(commander)
 
-  override def preStart() = {
-    //start in the connecting state
-    connecting(spawnNewConnection())
-  }
-
-  def receive: Receive = defaultBehavior
+  def receive: Receive = connecting()
 
   //if retryCount is non-negative, we are attempting to reconnect after a disconnection.
   //this method attempts to connect to just a single host - if it's successful, we then open
   //the rest of the connections
-  private def connecting(connection: ActorRef, retryCount: Int = -1) {
+  private def connecting(retryCount: Int = -1): Receive = {
 
-    context.setReceiveTimeout(settings.poolSettings.connectionTimeout)
+    spawnNewConnection(None)
 
     val behavior: Receive = {
-      case Athena.Connected(_, _) if sender == connection =>
+      case ConnectionInitialized(connection, keyspace) =>
+        markConnected(connection, keyspace)
         if(retryCount > -1) {
           log.info("Reconnected to host {}", remoteAddress.getAddress)
         } else {
           log.info("Connected to host {}", remoteAddress.getAddress)
         }
-        connected(connection)
+        connected()
 
-      case Athena.CommandFailed(Athena.Connect(_, _, _, _), None) =>
-        //no attached error to the failed response means we can try to recover
-        closeConnection(connection)
-        reconnecting(retryCount + 1)
-
-      case x@Athena.CommandFailed(Athena.Connect(_, _, _, _), Some(error)) =>
-        closeConnection(connection)
-        commander ! NodeFailed(remoteAddress.getAddress, error)
-        //now kill ourselves - we cannot connect
-        context.stop(self)
-
-      case Terminated(`connection`)  ⇒
+      case ConnectionAttemptFailed(_, error) =>
+        log.warning("Connection to {} failed due to error {}. Reconnecting.", remoteAddress, error)
         reconnecting(retryCount + 1)
 
       case cmd: Athena.CloseCommand =>
-        close(Set(connection), cmd, Set(sender))
+        close(cmd, Set(sender()))
+    }
 
-      case ReceiveTimeout =>
-        log.debug("Timed out waiting for core connection to host {} in connecting state.", remoteAddress.getAddress)
-        closeConnection(connection)
-        reconnecting(retryCount + 1)
-    } 
-    
-    context.become(behavior orElse defaultBehavior)
+    behavior orElse defaultBehavior
   }
 
   private def disconnected() = {
 
     context.setReceiveTimeout(Duration.Inf)
+
+    shutdownAll(Athena.Close)
 
     //notify the cluster that we've disconnected
     commander ! NodeDisconnected(remoteAddress.getAddress)
@@ -129,16 +136,16 @@ private[athena] class NodeConnector(commander: ActorRef,
     val behavior: Receive = {
       case Reconnect =>
         reconnectJob.cancel()
-        connecting(spawnNewConnection(), 0)
+        context.become(connecting(0))
 
       case InternalReconnect =>
-        connecting(spawnNewConnection(), retryCount)
+        context.become(connecting(retryCount))
     }
 
     context.become(behavior orElse defaultBehavior)
   }
 
-  private def connected(baseConnection: ActorRef) {
+  private def connected() {
 
     context.setReceiveTimeout(Duration.Inf)
 
@@ -146,136 +153,66 @@ private[athena] class NodeConnector(commander: ActorRef,
     commander ! NodeConnected(remoteAddress.getAddress)
 
     //spawn the rest of the connections in the pool
-    val newConnections: Seq[ActorRef] = (1 until settings.poolSettings.coreConnections).map { index =>
-      spawnNewConnection()
-    }
-    
-    val allConnectionStatus: Map[ActorRef, ConnectionStatus] = ((baseConnection -> Connected(baseConnection)) +: newConnections.map { conn =>
-      conn -> Connecting(conn)
-    }).toMap
+    // note - we spawn them without a keyspace initially
+    (1 until settings.poolSettings.coreConnections).foreach(_ => spawnNewConnection(None))
 
-    def disconnect(conns: Set[ActorRef]) = {
+    def disconnect() = {
       log.debug("Disconnecting pool from host {}", remoteAddress.getAddress)
-      conns.foreach(closeConnection)
+      liveConnections.keys.foreach(shutdownConnection(_, Athena.Close))
+      liveConnections = Map.empty
       disconnected()
     }
 
-    def step(connections: Map[ActorRef, ConnectionStatus]) {
+    val behavior: Receive = {
+      case ConnectionInitialized(connection, keyspace) =>
+        log.debug("Host {} adding connection {} to pool", remoteAddress.getAddress, connection)
+        markConnected(connection, keyspace)
 
-      def openConnections: Iterable[Connected] = connections.values.collect {
-        case x: Connected => x
-      }
+      case ConnectionAttemptFailed(keyspace, errorOpt) =>
+        log.warning("Connection to {} failed. Disconnecting from host.", remoteAddress)
+        disconnect()
 
-      def dispatch(req: AthenaRequest): Map[ActorRef, ConnectionStatus] = {
-        //find the least busy active connection and it's current request count
-        val active = openConnections
-        val leastBusy = active.reduceLeftOption[Connected] {
-          case (acc, connection) => if(connection.openRequestCount < acc.openRequestCount) connection else acc
-        }
-        leastBusy.map { connected =>
+      case KeyspaceSet(connection, newKeyspace) =>
+        markKeyspaceSwitch(connection, newKeyspace)
 
-          //if the least busy connection has more than the max number of simultaneous requests,
-          //and we have fewer than the max number of connections, spawn another one
-          val possiblyNewState =
-            if (connected.openRequestCount > settings.poolSettings.maxConcurrentRequests &&
-              active.size < settings.poolSettings.maxConnections) {
+      case KeyspaceAttemptFailed(newKeyspace, error) =>
+        markKeyspaceError(newKeyspace, error)
 
-              val newConnection = spawnNewConnection()
-              connections.updated(newConnection, Connecting(newConnection))
+      case Terminated(child) if liveConnections.contains(child) =>
+        log.warning("Connection unexpectedly terminated. Disconnecting node.")
+        removeConnection(child)
+        disconnect()
 
-          } else {
-            connections
-          }
+      case req: AthenaRequest =>
+        dispatch(PendingRequest(req, sender()))
 
-          //fire off a request actor
-          context.actorOf(
-            props = RequestActor.props(req, connected.connection, sender, settings.connectionSettings.requestTimeout),
-            name = "request-actor-" + counter.next()
-          )
+      case Disconnect =>
+        disconnect()
 
-          //increment the connection count
-          //just be paranoid
-          if(!possiblyNewState.contains(connected.connection)) {
-            throw new IllegalStateException("Cannot find entry for connection.")
-          } else {
-            possiblyNewState.updated(connected.connection, connected.copy(openRequestCount = connected.openRequestCount + 1))
-          }
-        } getOrElse {
-          //we don't have any available connections - signal that to our sender
-          sender ! ConnectionUnavailable(req)
-          connections
-        }
-      }
+      case RequestCompleted(connection) ⇒
+        log.debug("Request completed.")
+        decrementConnection(connection)
 
-      def decrementConnection(connection: ActorRef): Map[ActorRef, ConnectionStatus] = {
-        val connState = connections.getOrElse(connection, throw new IllegalStateException("Cannot find entry for connection."))
-        val newState = connState match {
-          case Connected(internalConn, requestCount) =>
-            if(requestCount <= 0) {
-              throw new IllegalStateException("Cannot decrement connection request count - new count would be negative.")
-            } else {
-              Connected(internalConn, requestCount - 1)
-            }
-          case _ =>
-            throw new IllegalStateException("Cannot decrement connection request count - connection not marked as active.")
-        }
-        connections.updated(connection, newState)
-      }
+      case Terminated(`commander`) =>
+        log.error("Node connector commander unexpectedly shut down. Terminating.")
+        close(Athena.Abort, Set())
 
-      val behavior: Receive = {
-        case Athena.Connected(remote, local) =>
-          val connection = sender
-          log.debug("Host {} adding connection {} to pool", remote.getAddress, connection)
-          //sanity check
-          if(!connections.contains(connection)) {
-            throw new IllegalStateException("Cannot add connected entry for actor - no record of it's connection attempt.")
-          }
-          step(connections.updated(connection, Connected(connection, 0)))
-
-        case Athena.CommandFailed(Athena.Connect(remoteHost, _, _, _), _) =>
-          disconnect(connections.keySet)
-
-        case Terminated(child) if connections.contains(child) =>
-          val newConns = connections - child
-          disconnect(newConns.keySet)
-
-        case req: AthenaRequest =>
-          step(dispatch(req))
-
-        case Disconnect =>
-          disconnect(connections.keySet)
-
-        case RequestCompleted(connection) ⇒
-          log.debug("Request completed.")
-          val newState = decrementConnection(connection)
-          step(newState)
-
-        case Terminated(`commander`) =>
-          log.error("Node connector commander unexpectedly shut down. Terminating.")
-          close(connections.keySet, Athena.Abort, Set())
-
-        case cmd: Athena.CloseCommand =>
-          close(connections.keySet, cmd, Set(sender))
-
-      }
-      
-      context.become(behavior orElse defaultBehavior)
+      case cmd: Athena.CloseCommand =>
+        close(cmd, Set(sender()))
     }
-    
-    
-    step(allConnectionStatus)
+
+    log.debug("Returning connected behavior.")
+    context.become(LoggingReceive(behavior orElse defaultBehavior))
   }
 
-  private def close(liveConnections: Set[ActorRef], command: Athena.CloseCommand, commanders: Set[ActorRef]) {
+  private def close(command: Athena.CloseCommand, commanders: Set[ActorRef]) {
 
     context.setReceiveTimeout(Duration.Inf)
 
-    log.debug("Closing node connector with active connections - {}", liveConnections)
-
+    log.debug("Closing node connector with active connections - {}", liveConnections.keys)
 
     def closing(closeActors: Set[ActorRef], command: Athena.CloseCommand, commanders: Set[ActorRef]) {
       log.debug("Moving to closing state with {} live connections.", closeActors.size)
-
 
       context.setReceiveTimeout(settings.poolSettings.connectionTimeout)
 
@@ -297,11 +234,11 @@ private[athena] class NodeConnector(commander: ActorRef,
             log.debug("Ignoring close command {} - already shutting down.", cmd)
             closing(closeActors, command, commanders + sender)
 
-          case Athena.Connected(_, _) =>
-            closing(closeActors + shutdownConnection(sender, command), command, commanders)
+          case ConnectionInitialized(connection, _) =>
+            closing(closeActors + shutdownConnection(connection, command), command, commanders)
 
-          case Athena.CommandFailed(Athena.Connect(remoteHost, _, _, _), _) =>
-          //ignore
+          case ConnectionAttemptFailed =>
+            //ignore
 
           case Terminated(child) if closeActors.contains(child) ⇒
             val stillOpen = closeActors - child
@@ -321,56 +258,305 @@ private[athena] class NodeConnector(commander: ActorRef,
     }
 
     log.debug("Killing all active connections.")
-    //watch the close actors
-    val closeActors = liveConnections.map{ connection =>
-      context.watch {
-        shutdownConnection(connection, command)
-      }
-    }
+    val closeActors = shutdownAll(command).map(context.watch)
 
     closing(closeActors, command, commanders)
   }
 
-  private def spawnNewConnection(): ActorRef = {
-    log.debug("Spawning connection.")
-    val connect = Athena.Connect(remoteAddress, keyspace, Some(settings.connectionSettings), None)
-    context.watch {
-      context.actorOf(
-        props = Props(new ConnectionActor(self, connect, settings.connectionSettings)),
-        name = "connection-" + counter.next().toString)
+  private def dispatch(pendingRequest: PendingRequest) {
+
+    val keyspace: Option[String] = pendingRequest.request match {
+      case x: KeyspaceAwareRequest => x.keyspace
+      case _ => None
     }
+
+    val activeConnections = liveConnections.collect {
+      case (connection, x: Active) => (connection, x)
+    }
+
+    def attemptLiveConnection(): Boolean = {
+
+      def compatibleConnection(active: (ActorRef, Active)): Boolean = {
+        if(active._2.openRequestCount <= settings.poolSettings.maxConcurrentRequests) {
+          if(keyspace.isEmpty) {
+            //if the statement doesn't have a keyspace, any connection will do
+            true
+          } else {
+            val ks = keyspace.get
+            //the keyspace of the connection must be compatible with that of the statement
+            active._2.keyspace.exists(_ == ks)
+          }
+        } else {
+          //connection is saturated
+          false
+        }
+      }
+
+      //first, filter out all connections that are not active and incompatible
+      //then find the connection with the least amount of active requests
+      //if it exists, use it
+      val leastBusy = activeConnections.view.filter(compatibleConnection).reduceLeftOption[(ActorRef, Active)] {
+        case (acc, active) => if(active._2.openRequestCount < acc._2.openRequestCount) active else acc
+      }
+
+      leastBusy.fold(false) {
+        case (connection, _) =>
+          //fire off a request actor
+          context.actorOf(
+            props = RequestActor.props(pendingRequest.request, connection, pendingRequest.respondTo, settings.connectionSettings.requestTimeout),
+            name = "request-actor-" + counter.next()
+          )
+
+          incrementConnection(connection)
+          true
+      }
+    }
+
+    def attemptPendingConnection(): Boolean = {
+      //if there is a pending connection attempt for the target keyspace, queue up the request for when it finishes
+      val isPending = liveConnections.exists {
+        case (_, Connecting(`keyspace`)) => true
+        case _ => false
+      }
+
+      if(isPending) {
+        val existingPending = pendingRequests.getOrElse(keyspace, Seq.empty)
+        pendingRequests = pendingRequests.updated(keyspace, pendingRequest +: existingPending)
+      }
+      isPending
+    }
+
+    def attemptSwitch(): Boolean = {
+      //if there's no explicit keyspace on the request, which means there's no way to switch
+      //an idle connection over to the desired keyspace.
+      keyspace.fold(false) { targetKeyspace =>
+        //is there already a request to switch to this keyspace for a connection?
+        val liveSwitchRequest = liveConnections.exists {
+          case (_, SwitchingKeyspace(`targetKeyspace`, _)) => true
+          case _ => false
+        }
+
+        val ableToSwitch = if(liveSwitchRequest) liveSwitchRequest else {
+          //check to see if we can find an idle connection to switch the keyspace on
+          val switchCandidate = activeConnections.collectFirst {
+            case (connection, active) if active.openRequestCount == 0 => connection
+          }
+          switchCandidate.fold(false) { toBeSwitched =>
+            switchKeyspace(toBeSwitched, targetKeyspace)
+            true
+          }
+        }
+
+        if(ableToSwitch) {
+          //don't need to find a connection to switch - just mark the request as pending for the switch result
+          val existingPending = pendingRequests.getOrElse(Some(targetKeyspace), Seq.empty)
+          pendingRequests = pendingRequests.updated(Some(targetKeyspace), pendingRequest +: existingPending)
+        }
+        ableToSwitch
+      }
+    }
+
+    def attemptNewConnection(): Boolean = {
+      //find all connections with a keyspace explicitly equal to the requested statement (not just compatible)
+      val openInKeyspace = activeConnections.count(x => x._2.keyspace == keyspace)
+      if(openInKeyspace < settings.poolSettings.maxConnections) {
+        //we can create a new connection - we have not reached the maximum number of simultaneous connections to a keyspace
+        spawnNewConnection(keyspace, Some(pendingRequest))
+        true
+      } else {
+        false
+      }
+    }
+
+    //TODO: This short-circuit/chaning construct is kind of ugly
+    if(!attemptLiveConnection()) {
+      if(!attemptPendingConnection()) {
+        if(!attemptSwitch()) {
+          if(!attemptNewConnection()) {
+            pendingRequest.respondTo ! ConnectionUnavailable(pendingRequest.request)
+          }
+        }
+      }
+    }
+
   }
 
-  private def shutdownConnection(connection: ActorRef, cmd: Athena.CloseCommand): ActorRef = {
-    cmd match {
-      case Athena.Abort => abortConnection(connection)
-      case Athena.Close => closeConnection(connection)
+  private def incrementConnection(connection: ActorRef) {
+    val connState = liveConnections.getOrElse(connection, throw new IllegalStateException("Cannot find entry for connection."))
+    val newState = connState match {
+      case x: Active => x.copy(openRequestCount = x.openRequestCount + 1)
+      case _ =>
+        throw new IllegalStateException("Cannot increment connection request count - connection not marked as active.")
     }
+    liveConnections = liveConnections.updated(connection, newState)
+
   }
 
-  private def closeConnection(connection: ActorRef): ActorRef = {
-    context.unwatch(connection)
-    context.actorOf(CloseActor.props(connection, Athena.Close, settings.connectionSettings.socketSettings.connectTimeout))
+  private def decrementConnection(connection: ActorRef) {
+    val connState = liveConnections.getOrElse(connection, throw new IllegalStateException("Cannot find entry for connection."))
+    val newState = connState match {
+      case x: Active =>
+        if(x.openRequestCount <= 0) {
+          throw new IllegalStateException("Cannot decrement connection request count - new count would be negative.")
+        } else {
+          x.copy(openRequestCount = x.openRequestCount - 1)
+        }
+      case _ =>
+        throw new IllegalStateException("Cannot decrement connection request count - connection not marked as active.")
+    }
+    liveConnections = liveConnections.updated(connection, newState)
   }
-  
-  private def abortConnection(connection: ActorRef): ActorRef = {
-    context.unwatch(connection)
-    context.actorOf(CloseActor.props(connection, Athena.Abort, settings.connectionSettings.socketSettings.connectTimeout))    
+
+  private def switchKeyspace(connection: ActorRef, keyspace: String) {
+
+    liveConnections.get(connection).fold[Unit](throw new IllegalArgumentException("Cannot switch keyspace for unknown connection.")) {
+      case Active(currentKeyspace, 0) =>
+        liveConnections = liveConnections.updated(connection, SwitchingKeyspace(keyspace, currentKeyspace))
+        import akka.pattern._
+
+        connection.ask(SetKeyspace(keyspace)).map {
+          case KeyspaceChanged(newKs) if newKs.toUpperCase == keyspace.toUpperCase =>
+            KeyspaceSet(connection, keyspace)
+
+          case KeyspaceChanged(unknown) =>
+            log.error("Got a set keyspace response to an incorrect keyspace - {}", unknown)
+            KeyspaceAttemptFailed(keyspace, Athena.InternalError("Keyspace operation failed."))
+
+          case ConnectionCommandFailed(_, Some(error)) =>
+            log.error("Could not set keyspace {} due to error - {}", keyspace, error)
+            KeyspaceAttemptFailed(keyspace, error)
+
+          case ConnectionCommandFailed(_, None) =>
+            log.error("Could not set keyspace {}", keyspace)
+            KeyspaceAttemptFailed(keyspace, Athena.InternalError("Keyspace operation failed."))
+
+          case keyspaceResponse =>
+            log.error("Unexpected response to set keyspace call - {}", keyspaceResponse)
+            KeyspaceAttemptFailed(keyspace, Athena.InternalError("Keyspace operation failed."))
+
+        } recover {
+          case NonFatal(t) =>
+            log.error("Could not set keyspace due to failure - {}", t)
+            KeyspaceAttemptFailed(keyspace, Athena.GeneralError("Keyspace operation failed."))
+        } pipeTo self
+
+      case Active(_, currentCount) =>
+        log.error("Cannot switch keyspace on connection with inflight requests. Current count - {}", currentCount)
+        throw new IllegalArgumentException("Cannot switch keyspace on connection with inflight requests.")
+
+      case x: SwitchingKeyspace if x.destinationKeyspace == keyspace =>
+        //do nothing - we're already switching it
+        log.debug("Doing nothing - already switching keyspace to {}", keyspace)
+
+      case x =>
+        log.error("Invalid keyspace request.")
+        throw new IllegalArgumentException(s"Request to set keyspace on connection in an invalid state - $x")
+
+    }
+
   }
-  
+
+  private def addPending(destinationKeyspace: Option[String], request: PendingRequest) {
+    val existing = pendingRequests.getOrElse(destinationKeyspace, Seq.empty)
+    pendingRequests = pendingRequests.updated(destinationKeyspace, request +: existing)
+  }
+
+  private def removePending(destinationKeyspace: Option[String]): Seq[PendingRequest] = {
+    val pending = pendingRequests.get(destinationKeyspace).getOrElse(Seq.empty)
+    pendingRequests = pendingRequests - destinationKeyspace
+    pending
+  }
+
+  private def shutdownConnection(connection: ActorRef, cmd: Athena.CloseCommand = Athena.Close): ActorRef = {
+    removeConnection(connection)
+    context.actorOf(CloseActor.props(connection, cmd, settings.connectionSettings.socketSettings.connectTimeout))
+  }
+
+  private def spawnNewConnection(keyspace: Option[String], pendingRequest: Option[PendingRequest] = None) {
+    log.debug("Spawning new connection to keyspace {}", keyspace)
+
+    //spawn a connection
+    val initializer = context.actorOf(
+      props = Props(new ConnectionInitializer(remoteAddress, settings.connectionSettings, keyspace))
+    )
+    val connection = context.actorOf(ConnectionActor.props(initializer, remoteAddress, settings.connectionSettings, keyspace))
+
+    liveConnections = liveConnections.updated(connection, Connecting(keyspace))
+
+    pendingRequest.foreach(p => addPending(keyspace, p))
+  }
+
+  private def markConnected(connection: ActorRef, keyspace: Option[String]) {
+    val currentState = liveConnections.getOrElse(connection, throw new IllegalArgumentException("Cannot mark an unknown connection as live."))
+    val nextState = currentState match {
+      case Connecting(ks) if keyspace == ks => Active(keyspace, 0)
+      case Connecting(ks) =>
+        log.error("Cannot mark a connection live on keyspace {} - was expecting keyspace {}", keyspace, ks)
+        throw new IllegalArgumentException("Cannot mark connection in non-connecting state as live.")
+      case x =>
+        log.error("Got unexpected state {} for newly-connected connection.", x)
+        throw new IllegalArgumentException("Cannot mark connection in non-connecting state as live.")
+    }
+    liveConnections = liveConnections.updated(connection, nextState)
+
+    //now dispatch any pending requests for a connection to this keyspace
+    removePending(keyspace).foreach(dispatch)
+  }
+
+  private def markKeyspaceSwitch(connection: ActorRef, newKeyspace: String) {
+    val currentState = liveConnections.getOrElse(connection, throw new IllegalArgumentException("Cannot mark an unknown connection with a new keyspace."))
+    val nextState = currentState match {
+      case SwitchingKeyspace(ks, _) if newKeyspace == ks => Active(Some(newKeyspace), 0)
+      case SwitchingKeyspace(ks, _) =>
+        log.error("Cannot set the keyspace on connection to {} - was expecting keyspace {}", newKeyspace, ks)
+        throw new IllegalArgumentException("Cannot update keyspace.")
+      case x =>
+        log.error("Got unexpected state {} for connection switching keyspace.", x)
+        throw new IllegalArgumentException("Cannot update keyspace.")
+    }
+    liveConnections = liveConnections.updated(connection, nextState)
+
+    //now dispatch any pending requests for a connection to this keyspace
+    removePending(Some(newKeyspace)).foreach(dispatch)
+  }
+
+  private def markKeyspaceError(keyspace: String, error: Athena.Error) {
+    liveConnections = liveConnections.mapValues {
+      case SwitchingKeyspace(destinationKeyspace, previousKeyspace) if keyspace == destinationKeyspace =>
+        Active(previousKeyspace, 0)
+      case x => x
+    }
+
+    //bounce anybody waiting on that keyspace
+    //now dispatch any pending requests for a connection to this keyspace
+    removePending(Some(keyspace)).foreach(x => x.respondTo ! Responses.ErrorResponse(x.request, error))
+  }
+
+  private def removeConnection(connection: ActorRef) {
+    context.unwatch(connection)
+    liveConnections = liveConnections - connection
+  }
+
+  private def shutdownAll(command: Athena.CloseCommand = Athena.Close) : Set[ActorRef] = {
+    //bounce all pending requests
+    pendingRequests.values.flatten.foreach(x => x.respondTo ! ConnectionUnavailable(x.request))
+    //close all existing connections
+    liveConnections.keySet.map(shutdownConnection(_, command))
+  }
+
 }
 
 private[athena] object NodeConnector {
 
 
-  def props(commander: ActorRef,
+  private[connector] def props(commander: ActorRef,
             remoteAddress: InetSocketAddress,
-            keyspace: Option[String],
-            settings: NodeConnectorSettings): Props = {
-    Props(new NodeConnector(commander, remoteAddress, keyspace, settings))
+            settings: NodeConnectorSettings,
+            preparedStatementDefs: Map[ByteString, PreparedStatementDef] = Map.empty): Props = {
+    Props(new NodeConnector(commander, remoteAddress, settings, preparedStatementDefs))
   }
 
-  def props(commander: ActorRef, setup: NodeConnectorSetup): Props = props(commander, setup.remoteAddress, setup.keyspace, setup.settings.get)
+  def props(commander: ActorRef, setup: NodeConnectorSetup): Props = props(commander, setup.remoteAddress, setup.settings.get)
 
   //used internally - this recconnect message won't reset the retry count
   private case object InternalReconnect
@@ -378,9 +564,23 @@ private[athena] object NodeConnector {
   //internal messaging events  
   private case class RequestCompleted(connection: ActorRef)
 
+  private case class PendingRequest(request: AthenaRequest, respondTo: ActorRef)
+
+  sealed trait KeyspaceResponse
+  private case class KeyspaceSet(connection: ActorRef, newKeyspace: String) extends KeyspaceResponse
+  private case class KeyspaceAttemptFailed(keyspace: String, error: Athena.Error) extends KeyspaceResponse
+
+  sealed trait ConnectionResponse
+  private case class ConnectionInitialized(connection: ActorRef, keyspace: Option[String]) extends ConnectionResponse
+  private case class ConnectionAttemptFailed(keyspace: Option[String], error: Option[Athena.Error]) extends ConnectionResponse
+
   private sealed trait ConnectionStatus
-  private case class Connecting(connection: ActorRef) extends ConnectionStatus
-  private case class Connected(connection: ActorRef, openRequestCount: Int = 0) extends ConnectionStatus
+  private case class Connecting(keyspace: Option[String] = None) extends ConnectionStatus
+  private case class Active(keyspace: Option[String] = None, openRequestCount: Int = 0) extends ConnectionStatus
+  private case class SwitchingKeyspace(destinationKeyspace: String, previousKeyspace: Option[String]) extends ConnectionStatus
+
+  private case object ReaperTick
+
 
   //reconnect policy
   private val BaseRecoDelay: Long = 1000 //1 second
@@ -391,6 +591,29 @@ private[athena] object NodeConnector {
     //Duration(1, TimeUnit.MINUTES)
   }
 
+  private class ConnectionInitializer(remoteAddress: InetSocketAddress, settings: ConnectionSettings, keyspace: Option[String]) extends Actor with ActorLogging {
+
+    context.setReceiveTimeout(settings.requestTimeout)
+
+    override def receive: Actor.Receive = {
+
+      case Athena.ConnectionFailed(addr, error) =>
+        log.error("Could not connect to {} - {}", addr, error)
+        context.parent ! ConnectionAttemptFailed(keyspace, error)
+        context.stop(self)
+
+      case Athena.Connected(addr, localAddr) =>
+        val connection = sender()
+        connection ! Athena.Register(context.parent)
+        context.parent ! ConnectionInitialized(connection, keyspace)
+        context.stop(self)
+
+      case ReceiveTimeout =>
+        log.error("Timed out waiting for connection.")
+        context.parent ! ConnectionAttemptFailed(keyspace, None)
+        context.stop(self)
+    }
+  }
 
   private class RequestActor(req: AthenaRequest, connection: ActorRef, respondTo: ActorRef, requestTimeout: Duration) extends Actor with ActorLogging {
 

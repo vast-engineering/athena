@@ -27,11 +27,14 @@ trait Reads[A] {
   def read(cvalue: CValue): CvResult[A]
 
   def map[B](f: A => B): Reads[B] =
-    Reads[B] { cvalue => self.read(cvalue).map(f) }
+    Reads[B](self.read(_).map(f))
 
   def flatMap[B](f: A => Reads[B]): Reads[B] = Reads[B] { cvalue =>
     self.read(cvalue).flatMap(t => f(t).read(cvalue))
   }
+
+  def andThen[B](f: A => CvResult[B]): Reads[B] =
+    Reads[B](self.read(_).flatMap(f))
 
   def filter(f: A => Boolean): Reads[A] =
     Reads[A] { cvalue => self.read(cvalue).filter(f) }
@@ -58,6 +61,7 @@ trait Reads[A] {
         case CvError(e) => CvError(e)
       }
     }
+
 
 }
 
@@ -171,11 +175,11 @@ trait DefaultReads {
   }
 
   implicit val JodaDateReads: Reads[DateTime] = nonNull {
-    case CTimestamp(date) => CvSuccess(date)
+    case CTimestamp(date) => CvSuccess(new DateTime(date))
   }
 
   implicit val DateReads: Reads[Date] = nonNull {
-    case CTimestamp(date) => CvSuccess(date.toDate)
+    case CTimestamp(date) => CvSuccess(new java.util.Date(date))
   }
 
   implicit val UUIDReads: Reads[UUID] = nonNull {
@@ -232,12 +236,10 @@ trait DefaultReads {
     case CSet(values) => CvResult.sequence(values.map(valueReads.read(_)))
   }
 
+  //This is mainly used by the driver to construct requests
   implicit object ByteStringReads extends Reads[ByteString] {
 
     private implicit val byteOrder = ByteOrder.BIG_ENDIAN
-    /**
-     * Convert the cassandra value into an A
-     */
     def read(cvalue: CValue): CvResult[ByteString] = cvalue match {
       case CASCIIString(value) => CvSuccess(ByteString(value, "ASCII"))
       case CVarChar(value) => CvSuccess(ByteString(value, "UTF-8"))
@@ -252,7 +254,7 @@ trait DefaultReads {
       case CDouble(value) => CvSuccess(newBuilder(8).putDouble(value).result())
       case CFloat(value) => CvSuccess(newBuilder(4).putFloat(value).result())
       case CInt(value) => CvSuccess(newBuilder(4).putInt(value).result())
-      case CTimestamp(value) => CvSuccess(newBuilder(8).putLong(value.getMillis).result())
+      case CTimestamp(value) => CvSuccess(newBuilder(8).putLong(value).result())
       case CUUID(value) =>
         val uuid = newBuilder(16)
           .putLong(value.getMostSignificantBits)

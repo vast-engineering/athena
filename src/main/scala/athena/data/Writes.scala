@@ -43,11 +43,11 @@ trait DefaultWrites {
   }
 
   implicit object DateTimeWrites extends Writes[DateTime] {
-    def writes(value: DateTime): CValue = CTimestamp(value)
+    def writes(value: DateTime): CValue = CTimestamp(value.getMillis)
   }
 
   implicit object DateWrites extends Writes[Date] {
-    def writes(value: Date): CValue = CTimestamp(new DateTime(value))
+    def writes(value: Date): CValue = CTimestamp(value.getTime)
   }
 
   implicit object UUIDWrites extends Writes[UUID] {

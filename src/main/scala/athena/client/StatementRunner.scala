@@ -3,7 +3,6 @@ package athena.client
 import play.api.libs.iteratee.{Enumeratee, Iteratee, Enumerator}
 import scala.concurrent.{ExecutionContext, Future}
 import athena.data.{CvResult, CValue}
-import org.slf4j.LoggerFactory
 import athena.util.Rate
 
 trait StatementRunner[A] {
@@ -14,29 +13,29 @@ trait StatementRunner[A] {
 
 object StatementRunner {
 
-  private val queryLog = LoggerFactory.getLogger("query." + classOf[StatementRunner[Any]].getName)
+  //private val queryLog = LoggerFactory.getLogger("query." + classOf[StatementRunner[Any]].getName)
 
   def unitRunner(query: String, args: Seq[CValue]): StatementRunner[Future[Unit]] = new StatementRunner[Future[Unit]] {
     override def execute(implicit session: Session, ec: ExecutionContext): Future[Unit] = {
-      queryLog.info("Executing query {} with params {}", query, args, "ignoredParam")
+      //queryLog.info("Executing query {} with params {}", query, args, "ignoredParam")
       session.executeStream(query, args).run(Iteratee.head).map(_ => ())
     }
   }
 
   def streamRunner[A](query: String, args: Seq[CValue])(implicit rr: RowReader[A]) = new StatementRunner[Enumerator[CvResult[A]]] {
     override def execute(implicit session: Session, ec: ExecutionContext): Enumerator[CvResult[A]] = {
-      queryLog.info("Executing query {} with params {}", query, args, "ignoredParam")
+      //queryLog.info("Executing query {} with params {}", query, args, "ignoredParam")
       session.executeStream(query, args).map(rr.read)
     }
   }
 
   def seqRunner[A](query: String, args: Seq[CValue])(implicit rr: RowReader[A]) = new StatementRunner[Future[Seq[CvResult[A]]]] {
     override def execute(implicit session: Session, ec: ExecutionContext): Future[Seq[CvResult[A]]] = {
-      queryLog.info("Executing query {} with params {}", query, args, "ignoredParam")
+      //queryLog.info("Executing query {} with params {}", query, args, "ignoredParam")
       val rate = new Rate
       val resultF = session.execute(query, args).map(rows => rows.map(rr.read(_)))
       resultF.map { result =>
-        queryLog.info(" Executed query {} with params {}", query, args, rate)
+        //queryLog.info(" Executed query {} with params {}", query, args, rate)
         result
       }
     }

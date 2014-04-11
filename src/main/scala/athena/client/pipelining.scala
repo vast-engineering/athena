@@ -28,7 +28,7 @@ object pipelining {
   def pipeline(connection: ActorRef)(implicit log: LoggingContext, ec: ExecutionContext, timeout: Timeout): AthenaRequest => Future[AthenaResponse] = {
     request =>
       connection.ask(request).map {
-        case ConnectionUnavailable(_, errors) =>
+        case NoHostsAvailable(_, errors) =>
           throw new NoHostAvailableException("No hosts available for request.", errors)
 
         case t: Timedout =>

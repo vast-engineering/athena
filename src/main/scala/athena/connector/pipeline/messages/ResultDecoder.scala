@@ -6,7 +6,6 @@ import athena.data.{ColumnDef, DataType, Metadata}
 import athena.util.ByteStringUtils
 import CassandraResponses._
 
-import com.typesafe.scalalogging.slf4j.Logging
 import akka.util.{ByteString, ByteIterator}
 import java.nio.ByteOrder
 
@@ -15,7 +14,7 @@ import scala.annotation.tailrec
 /**
  * A set of objects that know how to parse the various sub-responses for the RESULT response opcode.
  */
-private object ResultDecoder extends Logging {
+private object ResultDecoder {
 
   private[this] val HasGlobalTablesSpecFlag = 1
   private[this] val HasMorePagesFlag = 2
@@ -96,6 +95,16 @@ private object ResultDecoder extends Logging {
     Metadata(columnsCount, columnDefs, pagingState)
   }
 
+  def decodePepared(it: ByteIterator)(implicit bo: ByteOrder): PreparedResult = {
+    val id = ByteStringUtils.readShortBytes(it)
+    val meta = decodeMetaData(it)
+    val resultMetadata = decodeMetaData(it)
+    PreparedResult(id, meta, resultMetadata)
+  }
+
+  def decodeSchemaChange(it: ByteIterator)(implicit bo: ByteOrder): SchemaChange = {
+    SchemaChange(ByteStringUtils.readString(it), ByteStringUtils.readString(it), ByteStringUtils.readString(it))
+  }
 
 
 }

@@ -4,21 +4,26 @@ import athena.data._
 import scala.annotation.implicitNotFound
 
 /**
- * A typeclass defining instances that know how to convert a single row from a Cassandra result into a type T
+ * A typeclass defining instances that know how to convert a single row from a Cassandra result into a type A
  */
 @implicitNotFound(
-  "An implicit instance of RowReader could not be found for the type ${T}. If T is a scalar type, ensure that a Reads is available for it. If it's a Tuple, ensure that a Reads is available for each member."
+  "An implicit instance of RowReader could not be found for the type ${A}. If A is a scalar type, ensure that a Reads is available for it. If it's a Tuple, ensure that a Reads is available for each member."
 )
-trait RowReader[T] { self =>
-  def read(cvalue: Row): CvResult[T]
+trait RowReader[A] { self =>
+  def read(cvalue: Row): CvResult[A]
 
-  def map[A](f: T => A): RowReader[A] = RowReader[A] { row =>
+  def map[B](f: A => B): RowReader[B] = RowReader[B] { row =>
     self.read(row).map(f)
   }
 
-  def flatMap[A](f: T => RowReader[A]): RowReader[A] = RowReader[A] { row =>
+  def flatMap[B](f: A => RowReader[B]): RowReader[B] = RowReader[B] { row =>
     self.read(row).flatMap(t => f(t).read(row))
   }
+
+  def andThen[B](f: A => CvResult[B]): RowReader[B] = RowReader[B] { row =>
+    self.read(row).flatMap(f)
+  }
+
 }
 
 object RowReader {

@@ -1,6 +1,6 @@
 package athena.connector
 
-import athena.{Errors, Responses, ClusterConnectorSettings, Athena}
+import athena.{Errors, Responses, Athena}
 import akka.actor._
 import akka.pattern._
 import athena.Requests.AthenaRequest
@@ -8,14 +8,7 @@ import athena.Responses._
 import scala.concurrent.duration.Duration
 import athena.Athena._
 import java.net.{InetSocketAddress, InetAddress}
-import akka.event.LoggingAdapter
 import athena.connector.ClusterMonitorActor.{ClusterUnreachable, ClusterReconnected}
-import athena.Athena.NodeDisconnected
-import scala.Some
-import athena.Athena.NodeConnected
-import akka.actor.Terminated
-import athena.connector.ClusterInfo.ClusterMetadata
-import java.util.concurrent.TimeUnit
 import athena.Athena.NodeDisconnected
 import athena.Responses.RequestFailed
 import scala.Some
@@ -29,6 +22,8 @@ import akka.actor.Terminated
 import athena.Responses.Timedout
 import athena.connector.ClusterInfo.ClusterMetadata
 import spray.util.LoggingContext
+import athena.data.PreparedStatementDef
+import akka.util.ByteString
 
 private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnectorSetup) extends Actor with ActorLogging {
 
@@ -61,6 +56,8 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
   private[this] var statusListeners: Set[ActorRef] = Set(commander)
 
   private[this] var currentStatus: ClusterStatusEvent = ClusterDisconnected
+
+  private[this] var preparedStatements: Map[ByteString, PreparedStatementDef] = Map.empty
 
   private[this] val defaultBehavior: Receive = {
     case req: AthenaRequest =>
@@ -119,6 +116,10 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
       val listener = sender()
       context.unwatch(listener)
       statusListeners = statusListeners - listener
+
+    case x: StatementPrepared =>
+      preparedStatements = preparedStatements.updated(x.stmtDef.id, x.stmtDef)
+      pools.values.foreach(_ ! x)
 
   }
 
@@ -190,6 +191,7 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
           props = RequestActor.props(req, sender(), queryPlan, defaultRequestTimeout),
           name = "request-actor-" + actorNameIndex.next()
         )
+
     }
 
     behavior orElse defaultBehavior
@@ -231,6 +233,7 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
       }
     }
 
+    //context.unwatch(clusterMonitor)
     val toClose = pools.values.toSet + clusterMonitor
     val closeActors = toClose.map { pool =>
       context.watch(closeActor(pool))
@@ -285,9 +288,10 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
     if(pools.contains(host)) {
       throw new IllegalStateException(s"Cannot add pool for already existing host $host")
     }
+    //watch the pool actor, if it dies, so do we.
     val pool = context.watch {
       context.actorOf(
-        props = NodeConnector.props(self, new InetSocketAddress(host, setup.port), setup.keyspace, settings.localNodeSettings),
+        props = NodeConnector.props(self, new InetSocketAddress(host, setup.port), settings.localNodeSettings),
         name = "node-connector-" + actorNameIndex.next() + "-" + host.getHostAddress
       )
     }
@@ -337,6 +341,14 @@ private[athena] object ClusterConnector {
   def props(commander: ActorRef, setup: ClusterConnectorSetup): Props = {
     Props(new ClusterConnector(commander, setup))
   }
+
+  /**
+   * Send to the Cluster actor when connected to test the validity of a keyspace.
+   * @param keyspace
+   */
+  case class CheckKeyspace(keyspace: String)
+  case class KeyspaceValid(keyspace: String)
+
 
   private case class ConnectedHost(addr: InetAddress, connection: ActorRef)
 
@@ -402,6 +414,11 @@ private[athena] object ClusterConnector {
             log.warning("Request to host {} timed out before response received.")
             errors = errors.updated(host.addr, Timedout(originalRequest))
             attemptRequest(request, retryCount)
+
+          case resp@Prepared(_, stmtDef) =>
+            sendResponse(resp)
+            context.parent ! StatementPrepared(stmtDef)
+            context.stop(self)
 
           case resp: AthenaResponse =>
             if(resp.isFailure) {

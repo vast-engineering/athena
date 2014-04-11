@@ -21,17 +21,18 @@ private[connector] object CassandraRequests {
 
   case object Startup extends CassandraRequest
 
-  sealed trait FetchRequest extends CassandraRequest {
-    def withPagingState(pagingState: Option[ByteString]): FetchRequest
-  }
+  case class QueryParams(consistency: Consistency,
+                         serialConsistency: SerialConsistency,
+                         resultPageSize: Option[Int],
+                         params: Seq[CValue] = IndexedSeq(),
+                         pagingState: Option[ByteString] = None)
 
-  case class QueryRequest(query: String, consistency: Consistency, serialConsistency: SerialConsistency, resultPageSize: Option[Int],
-                          params: Seq[CValue] = IndexedSeq(),
-                          pagingState: Option[ByteString] = None) extends FetchRequest {
-    def withPagingState(pagingState: Option[ByteString]) = copy(pagingState = pagingState)
-  }
+  case class QueryRequest(query: String, params: QueryParams) extends CassandraRequest
+  case class ExecuteRequest(statementId: ByteString, params: QueryParams, excludeMetadata: Boolean) extends CassandraRequest
 
   case class Register(eventNames: Seq[ClusterEventName]) extends CassandraRequest
+
+  case class Prepare(query: String) extends CassandraRequest
 
 }
 

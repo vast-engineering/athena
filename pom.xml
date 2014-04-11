@@ -8,7 +8,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.vast</groupId>
     <artifactId>athena</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>0.2.0-SNAPSHOT</version>
     <packaging>scala-jar</packaging>
 
     <name>Athena</name>
@@ -26,8 +26,7 @@
         <scala.major.version>2.10</scala.major.version>
         <scala.minor.version>3</scala.minor.version>
         <scala.version>${scala.major.version}.${scala.minor.version}</scala.version>
-        <akka.version>2.3.0</akka.version>
-        <slf4j.version>1.7.5</slf4j.version>
+        <akka.version>2.3.2</akka.version>
         <spray.version>1.3.0</spray.version>
         <play.version>2.2.2</play.version>
 
@@ -128,20 +127,9 @@
             <version>2.6</version>
         </dependency>
 
-        <!-- Logging dependencies -->
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-api</artifactId>
-            <version>${slf4j.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>com.typesafe</groupId>
-            <artifactId>scalalogging-slf4j_${scala.major.version}</artifactId>
-            <version>1.0.1</version>
-        </dependency>
 
         <!-- test dependencies -->
+
         <dependency>
             <groupId>com.typesafe.akka</groupId>
             <artifactId>akka-slf4j_${scala.major.version}</artifactId>
@@ -173,7 +161,7 @@
         <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
-            <version>1.0.13</version>
+            <version>1.1.2</version>
             <scope>test</scope>
         </dependency>
 

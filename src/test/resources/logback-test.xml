@@ -7,8 +7,7 @@
         </encoder>
     </appender>
 
-    <logger name="athena" level="INFO"/>
-    <logger name="query" level="INFO"/>
+    <logger name="athena" level="DEBUG"/>
 
     <root level="INFO">
         <appender-ref ref="STDOUT"/>

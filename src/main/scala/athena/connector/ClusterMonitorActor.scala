@@ -21,6 +21,7 @@ import akka.actor.Terminated
 import athena.connector.ClusterInfo.ClusterMetadata
 import athena.connector.ClusterConnector.HostStatusChanged
 import athena.Athena.NodeDisconnected
+import athena.connector.ConnectionActor.ClusterEventsSubscribed
 
 private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set[InetAddress], port: Int, settings: ClusterConnectorSettings)
   extends Actor with ActorLogging with ClusterUtils {
@@ -84,7 +85,7 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
         log.debug("Attempting connection to {}", host.addr)
         val connectionSettings = settings.localNodeSettings.connectionSettings
         val address = new InetSocketAddress(host.addr, port)
-        IO(Athena) ! Athena.Connect(address, None, Some(connectionSettings), Some(context.self))
+        IO(Athena) ! Athena.Connect(address, Some(connectionSettings))
         
         {
           case Athena.Connected(remote, local) =>
@@ -94,9 +95,20 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
               //we should tell the cluster manager to immediately attempt a reconnect
               commander ! ClusterReconnected
             }
-            context.become(connected(sender, host, allHosts))
+            val connection = sender()
+            connection ! Athena.Register(self)
+            connection ! ConnectionActor.SubscribeToEvents
+            context.become {
+              case ClusterEventsSubscribed =>
+                log.debug("Subscribed to cluster events. Moving to connected.")
+                context.become(connected(connection, host, allHosts))
+              case ReceiveTimeout =>
+                log.warning("Timed out waiting for subscription. Closing connection.")
+                context.actorOf(CloseActor.props(connection, Athena.Close, settings.localNodeSettings.closeTimeout))
+                context.become(tryConnect(connectionHosts.tail))
+            }
 
-          case Athena.CommandFailed(Athena.Connect(remoteHost, _, _, _), error) =>
+          case Athena.ConnectionFailed(remoteHost, error) =>
             if(error.isDefined) {
               log.warning("Cluster connector cannot connect to host {} due to error {}", connectionHosts.head.addr, error.get)
               log.warning("Trying next host.")

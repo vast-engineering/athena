@@ -8,7 +8,12 @@ import akka.util.ByteString
 case class ColumnDef(keyspace: String, table: String, name: String, dataType: DataType)
 
 /**
- * Used to describe result columns in a query, and input parameters for a prepared statement.
+ * Used to describe result columns in a rows response.
  */
 case class Metadata(columnsCount: Int, columns: Option[IndexedSeq[ColumnDef]], pagingState: Option[ByteString])
 
+case class PreparedStatementDef(id: ByteString,
+                                rawQuery: String,
+                                keyspace: Option[String],
+                                parameterDefs: IndexedSeq[ColumnDef],
+                                resultDefs: IndexedSeq[ColumnDef])

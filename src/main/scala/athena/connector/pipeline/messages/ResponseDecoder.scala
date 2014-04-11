@@ -3,7 +3,7 @@ package athena.connector.pipeline.messages
 import athena._
 import akka.util.ByteString
 import java.nio.ByteOrder
-import athena.util.{ByteStringUtils, MD5Digest}
+import athena.util.ByteStringUtils
 import java.net.InetSocketAddress
 
 import athena.connector.CassandraResponses._
@@ -56,10 +56,9 @@ private[pipeline] object ResponseDecoder {
         AlreadyExistsError(message, ksName, cfName)
       case UNPREPARED =>
         val length = it.getShort
-        val bytes = it.take(length).toArray
+        val bytes = it.take(length).toByteString
         it.drop(length)
-        val digest = new MD5Digest(bytes)
-        UnpreparedError(message, host, digest)
+        UnpreparedError(message, host, bytes)
       case x =>
         throw new Athena.InternalException(s"Unknown error code $x")
     }
@@ -81,6 +80,8 @@ private[pipeline] object ResponseDecoder {
       case VoidCode => SuccessfulResult
       case RowsCode => ResultDecoder.decodeRows(it)
       case SetKeyspaceCode => ResultDecoder.decodeSetKeyspace(it)
+      case PreparedCode => ResultDecoder.decodePepared(it)
+      case SchemaChangeCode => ResultDecoder.decodeSchemaChange(it)
       case x => throw new NotImplementedError(s"Decoder for response code $x not implemented.")
     }
   }

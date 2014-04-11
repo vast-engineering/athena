@@ -20,11 +20,13 @@ private[connector] object CassandraResponses {
 
   case object Ready extends CassandraResponse
 
-  sealed abstract class Result extends CassandraResponse
+  sealed trait Result extends CassandraResponse
 
   case object SuccessfulResult extends Result
   case class RowsResult(metadata: Metadata, data: Seq[IndexedSeq[ByteString]]) extends Result
   case class KeyspaceResult(keyspace: String) extends Result
+  case class PreparedResult(id: ByteString, metadata: Metadata, resultMetadata: Metadata) extends Result
+  case class SchemaChange(change: String, keyspace: String, table: String) extends Result
 
   sealed trait ClusterEvent extends CassandraResponse
 

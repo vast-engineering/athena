@@ -17,11 +17,11 @@ class InterpTest extends WordSpec with AthenaTest {
   "A query literal" should {
 
     "work properly" in {
-      implicit val session = Session(hosts, port)
+      implicit val session = Session(hosts, port, "testks")
       log.info("Starting query.")
 
       val id = 1234
-      val foo = await(cql"select * from testks.users where id = $id".as[(Long, String)].execute.run(Iteratee.getChunks))
+      val foo = await(cql"select * from users where id = $id".as[(Long, String)].execute.run(Iteratee.getChunks))
 
       log.info("Finished query with result {}", foo)
       session.close()

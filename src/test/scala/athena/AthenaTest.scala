@@ -7,15 +7,16 @@ import scala.concurrent.{ExecutionContext, Await, Future}
 import org.scalatest.{BeforeAndAfterAll, Suite}
 import akka.event.Logging
 import akka.io.IO
-import java.net.InetAddress
+import java.net.{InetSocketAddress, InetAddress}
 import athena.testutils.{ProcessManager, LineHandler, CassandraManager}
+import scala.util.control.NonFatal
 
 trait TestLogging { self: TestKitBase =>
   val log = Logging(system, self.getClass)
 }
 
 trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender with BeforeAndAfterAll with TestLogging {
-  self: Suite =>
+  thisSuite: Suite =>
 
   lazy val config: Config = ConfigFactory.load()
   implicit lazy val system: ActorSystem = ActorSystem("test-system", config)
@@ -77,10 +78,10 @@ trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender wit
   protected val hosts: Set[InetAddress] = config.getStringList("athena.test.hosts").map(InetAddress.getByName)(collection.breakOut)
   protected val port = 9042
 
-  protected def withClusterConnection[A](keyspace: Option[String] = None)(f: ActorRef => A): A = {
+  protected def withClusterConnection[A]()(f: ActorRef => A): A = {
     val probe = TestProbe()
-    val connector = within(10 seconds) {
-      IO(Athena).tell(Athena.ClusterConnectorSetup(hosts, port, keyspace, None), probe.ref)
+    val connector = {
+      IO(Athena).tell(Athena.ClusterConnectorSetup(hosts, port, None), probe.ref)
       probe.expectMsgType[Athena.ClusterConnectorInfo]
       probe.expectMsg(Athena.ClusterConnected)
       probe.lastSender
@@ -93,13 +94,12 @@ trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender wit
     }
   }
 
-  protected def withNodeConnection[A](keyspace: Option[String] = None)(f: ActorRef => A): A = {
-    val probe = TestProbe()
-    val connector = within(10 seconds) {
-      IO(Athena).tell(Athena.NodeConnectorSetup(hosts.head.getHostName, port, keyspace, None), probe.ref)
-      probe.expectMsgType[Athena.NodeConnectorInfo].nodeConnector
-      probe.expectMsgType[Athena.NodeConnected]
-      probe.lastSender
+  protected def withNodeConnection[A]()(f: ActorRef => A): A = {
+    val connector = {
+      IO(Athena) ! Athena.NodeConnectorSetup(hosts.head.getHostName, port, None)
+      expectMsgType[Athena.NodeConnectorInfo].nodeConnector
+      expectMsgType[Athena.NodeConnected]
+      lastSender
     }
 
     try {
@@ -111,10 +111,12 @@ trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender wit
 
   protected def withConnection[A](keyspace: Option[String] = None)(f: ActorRef => A): A = {
     val probe = TestProbe()
-    val connector = within(10 seconds) {
-      IO(Athena).tell(Athena.Connect(hosts.head.getHostName, port, keyspace), probe.ref)
+    val connector = {
+      IO(Athena).tell(Athena.Connect(new InetSocketAddress(hosts.head.getHostName, port), initialKeyspace = keyspace), probe.ref)
       probe.expectMsgType[Athena.Connected]
-      probe.lastSender
+      val connection = probe.lastSender
+      connection ! Athena.Register(self)
+      connection
     }
     try {
       f(connector)
