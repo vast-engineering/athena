@@ -23,6 +23,8 @@ import scala.concurrent.{ExecutionContext, Future}
 import spray.util.LoggingContext
 import athena.client.pipelining.Pipeline
 import athena.connector.ClusterConnector
+import org.slf4j.LoggerFactory
+import athena.util.Rate
 
 trait Session {
 
@@ -138,6 +140,8 @@ object Session {
   abstract class SimpleSession(pipeline: Pipeline)
                                       (implicit log: LoggingContext, ec: ExecutionContext) extends Session {
 
+    import SimpleSession._
+
     private[this] val queryPipe = pipelining.queryPipeline(pipeline)
     private[this] val streamPipe = pipelining.streamingPipeline(pipeline)
 
@@ -145,16 +149,27 @@ object Session {
                      values: Seq[CValue] = Seq(),
                      consistency: Consistency = Consistency.ONE,
                      serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Enumerator[Row] = {
+      // TODO: query and rate logging before and after streaming
       streamPipe(SimpleStatement(query, values, Some(consistency), Some(serialConsistency)))
     }
 
     def execute(query: String,
-                      values: Seq[CValue] = Seq(),
-                      consistency: Consistency = Consistency.ONE,
-                      serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Future[Seq[Row]] = {
-      queryPipe(SimpleStatement(query, values,Some(consistency), Some(serialConsistency)))
+                values: Seq[CValue] = Seq(),
+                consistency: Consistency = Consistency.ONE,
+                serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Future[Seq[Row]] = {
+      queryLog.info("Executing query {} with params {}", query, values, "ignoredParam")
+      val rate = new Rate
+      val resultF = queryPipe(SimpleStatement(query, values, Some(consistency), Some(serialConsistency)))
+      resultF.map { result =>
+        queryLog.info(" Executed query {} with params {} {}", query, values, rate)
+        result
+      }
     }
 
+  }
+
+  object SimpleSession {
+    private val queryLog = LoggerFactory.getLogger("query." + classOf[Session].getName)
   }
 
 }
