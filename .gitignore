@@ -5,6 +5,7 @@
 
 .classpath
 .project
+.cache
 
 target
 worksheets
