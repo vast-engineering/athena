@@ -18,10 +18,14 @@ object QueryInterpolation {
     implicit def fromWrites[T](t: T)(implicit w: Writes[T]): ParamGenerator[T] = new ParamGenerator[T] {
       override def toParam: CValue = w.writes(t)
     }
+
   }
 
   implicit class QueryContext(val s: StringContext) extends AnyVal {
 
+    def i(args: Any*) = {
+
+    }
     def cql(paramGenerators: ParamGenerator[_]*) = {
       val params = paramGenerators.map(_.toParam)
       val query = s.parts.mkString("?")
@@ -39,6 +43,10 @@ object QueryInterpolation {
 
     def asQuery[A, B](implicit rw: RowWriter[A], rr: RowReader[B]): A => StatementRunner[Enumerator[CvResult[B]]] = {
       a => StatementRunner.streamRunner(q, rw.write(a))(rr)
+    }
+
+    def asQueryNoArgs[B](implicit rr: RowReader[B]): StatementRunner[Enumerator[CvResult[B]]] = {
+      StatementRunner.streamRunner(q, Seq())(rr)
     }
 
     def asUpdate[A](implicit rw: RowWriter[A]): A => StatementRunner[Future[Unit]] = {

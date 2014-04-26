@@ -10,7 +10,8 @@
     <logger name="athena" level="INFO"/>
     <logger name="query" level="INFO"/>
 
-    <root level="WARN">
+    <root level="INFO">
         <appender-ref ref="STDOUT"/>
     </root>
+
 </configuration>

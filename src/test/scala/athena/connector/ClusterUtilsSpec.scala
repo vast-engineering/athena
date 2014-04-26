@@ -12,18 +12,16 @@ import java.util.concurrent.TimeUnit
 import akka.util.Timeout
 import scala.concurrent.Await
 
-import athena.TestData._
-
 class ClusterUtilsSpec extends WordSpec with AthenaTest with Matchers with ClusterUtils {
 
   private[this] val timeoutDuration: FiniteDuration = Duration(10, TimeUnit.SECONDS)
   private[this] implicit val timeout = Timeout(timeoutDuration)
 
-  val host = Hosts.head
+  val host = hosts.head
 
   "The cluster utils" should {
     "get the cluster info" in {
-      withClusterConnection(Hosts) { connector =>
+      withClusterConnection() { connector =>
         val pipeline = pipelining.queryPipeline(connector)
         val res = Await.result(updateClusterInfo(host, pipeline), timeoutDuration)
         log.debug("Cluster info - {}", res)

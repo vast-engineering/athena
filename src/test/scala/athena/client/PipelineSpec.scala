@@ -14,7 +14,6 @@ import java.util.concurrent.TimeUnit
 import athena.Requests.{SimpleStatement, Statement}
 import play.api.libs.iteratee.{Iteratee, Enumerator}
 
-import athena.TestData._
 
 class PipelineSpec extends WordSpec with AthenaTest with Matchers {
 
@@ -23,7 +22,7 @@ class PipelineSpec extends WordSpec with AthenaTest with Matchers {
   "A pipeline" when {
     "using a raw connection" should {
       "execute a simple query" in {
-        withConnection(Hosts.head.getHostAddress, Some("testks")) { connection =>
+        withConnection(Some("testks")) { connection =>
           simpleQuery(pipelining.queryPipeline(connection))
         }
 
@@ -31,14 +30,14 @@ class PipelineSpec extends WordSpec with AthenaTest with Matchers {
     }
     "using a node connection pool" should {
       "execute a simple query" in {
-        withNodeConnection(Hosts.head.getHostAddress, Some("testks")) { connection =>
+        withNodeConnection(Some("testks")) { connection =>
           simpleQuery(pipelining.queryPipeline(connection))
         }
       }
     }
     "using a cluster connection" should {
       "execute a simple query" in {
-        withClusterConnection(Hosts, Some("testks")) { connection =>
+        withClusterConnection(Some("testks")) { connection =>
           simpleQuery(pipelining.queryPipeline(connection))
         }
       }

@@ -7,8 +7,8 @@ import scala.concurrent.{ExecutionContext, Await, Future}
 import org.scalatest.{BeforeAndAfterAll, Suite}
 import akka.event.Logging
 import akka.io.IO
-import athena.TestData._
 import java.net.InetAddress
+import com.vast.farsandra.{ProcessManager, LineHandler, Farsandra}
 
 trait TestLogging { self: TestKitBase =>
   val log = Logging(system, self.getClass)
@@ -24,7 +24,39 @@ trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender wit
   //ensure the actor actorRefFactory is shut down no matter what
   override val invokeBeforeAllAndAfterAllEvenIfNoTestsAreExpected = true
 
-  override protected def afterAll(): Unit = {
+  import collection.JavaConversions._
+
+  private[this] var cassandraProcess: ProcessManager = _
+
+  override protected def beforeAll() {
+    val farsandra = new Farsandra()
+      .withVersion("2.0.7")
+      .withInstanceName(".farsandra-test")
+      .withCleanInstanceOnStart(true)
+      .withCreateConfigurationFiles(true)
+      .withHost("localhost")
+      .withSeeds(Seq("localhost"))
+      .withOutputHandler(new LineHandler {
+        override def handleLine(line: String) {
+          log.debug(s"Cassandra out - $line")
+        }
+      })
+      .withErrorHandler(new LineHandler {
+        override def handleLine(line: String) {
+          log.error(s"Cassandra err - $line")
+        }
+      })
+
+    cassandraProcess = farsandra.start()
+
+    val queryExecutor = farsandra.executeCQL("/schema.cql")
+    if(queryExecutor.waitForShutdown(5000) != 0) {
+      throw new RuntimeException("Could not execute CQL!")
+    }
+  }
+
+  override protected def afterAll() {
+    cassandraProcess.destroyAndWaitForShutdown(5000)
     shutdown(system, verifySystemShutdown = true)
   }
 
@@ -33,10 +65,13 @@ trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender wit
   import scala.concurrent.duration._
   import scala.language.postfixOps
 
-  protected def withClusterConnection[A](hosts: Set[InetAddress], keyspace: Option[String] = None)(f: ActorRef => A): A = {
+  protected val hosts = Set(InetAddress.getByName("localhost"))
+  protected val port = 9042
+
+  protected def withClusterConnection[A](keyspace: Option[String] = None)(f: ActorRef => A): A = {
     val probe = TestProbe()
     val connector = within(10 seconds) {
-      IO(Athena).tell(Athena.ClusterConnectorSetup(hosts, Port, keyspace, None), probe.ref)
+      IO(Athena).tell(Athena.ClusterConnectorSetup(hosts, port, keyspace, None), probe.ref)
       probe.expectMsgType[Athena.ClusterConnectorInfo]
       probe.expectMsg(Athena.ClusterConnected)
       probe.lastSender
@@ -49,10 +84,10 @@ trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender wit
     }
   }
 
-  protected def withNodeConnection[A](host: String, keyspace: Option[String] = None)(f: ActorRef => A): A = {
+  protected def withNodeConnection[A](keyspace: Option[String] = None)(f: ActorRef => A): A = {
     val probe = TestProbe()
     val connector = within(10 seconds) {
-      IO(Athena).tell(Athena.NodeConnectorSetup(host, Port, keyspace, None), probe.ref)
+      IO(Athena).tell(Athena.NodeConnectorSetup(hosts.head.getHostName, port, keyspace, None), probe.ref)
       probe.expectMsgType[Athena.NodeConnectorInfo].nodeConnector
       probe.expectMsgType[Athena.NodeConnected]
       probe.lastSender
@@ -65,10 +100,10 @@ trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender wit
     }
   }
 
-  protected def withConnection[A](host: String, keyspace: Option[String] = None)(f: ActorRef => A): A = {
+  protected def withConnection[A](keyspace: Option[String] = None)(f: ActorRef => A): A = {
     val probe = TestProbe()
     val connector = within(10 seconds) {
-      IO(Athena).tell(Athena.Connect(host, Port, keyspace), probe.ref)
+      IO(Athena).tell(Athena.Connect(hosts.head.getHostName, port, keyspace), probe.ref)
       probe.expectMsgType[Athena.Connected]
       probe.lastSender
     }
