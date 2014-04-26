@@ -33,7 +33,8 @@ libraryDependencies ++= Seq(
 	"org.scalatest" %% "scalatest" % "2.0" % "test",
 	"org.slf4j" % "slf4j-api" % "1.7.5",
 	"org.slf4j" % "slf4j-jdk14" % "1.7.5",
-	"org.cassandraunit" % "cassandra-unit-spring" % "2.0.2.1"
+	"org.cassandraunit" % "cassandra-unit-spring" % "2.0.2.1",
+	"org.apache.commons" % "commons-compress" % "1.6"    
 )
 
 
