@@ -21,10 +21,7 @@ class InterpTest extends WordSpec with AthenaTest {
       log.info("Starting query.")
 
       val id = 1234
-      val foo = Await.result(
-        cql"select * from testks.users where id = $id".as[(Long, String)].execute.run(Iteratee.getChunks),
-        Duration.Inf
-      )
+      val foo = await(cql"select * from testks.users where id = $id".as[(Long, String)].execute.run(Iteratee.getChunks))
 
       log.info("Finished query with result {}", foo)
       session.close()

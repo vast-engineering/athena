@@ -8,7 +8,7 @@ import org.scalatest.{BeforeAndAfterAll, Suite}
 import akka.event.Logging
 import akka.io.IO
 import java.net.InetAddress
-import com.vast.farsandra.{ProcessManager, LineHandler, Farsandra}
+import athena.testutils.{ProcessManager, LineHandler, CassandraManager}
 
 trait TestLogging { self: TestKitBase =>
   val log = Logging(system, self.getClass)
@@ -26,10 +26,10 @@ trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender wit
 
   import collection.JavaConversions._
 
-  private[this] var cassandraProcess: ProcessManager = _
+  private[this] var cassandraProcess: Option[ProcessManager] = None
 
   override protected def beforeAll() {
-    val farsandra = new Farsandra()
+    val cassandraManager = new CassandraManager()
       .withVersion("2.0.7")
       .withInstanceName(".farsandra-test")
       .withCleanInstanceOnStart(true)
@@ -47,16 +47,25 @@ trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender wit
         }
       })
 
-    cassandraProcess = farsandra.start()
 
-    val queryExecutor = farsandra.executeCQL("/schema.cql")
-    if(queryExecutor.waitForShutdown(5000) != 0) {
-      throw new RuntimeException("Could not execute CQL!")
+    if(config.getBoolean("athena.test.start-cassandra")) {
+      cassandraProcess = Some(cassandraManager.start())
+    }
+
+    if(config.getBoolean("athena.test.create-keyspace")) {
+      val queryExecutor = cassandraManager.executeCQL("/schema.cql")
+      if(queryExecutor.waitForShutdown(5000) != 0) {
+        throw new RuntimeException("Could not execute CQL!")
+      }
     }
   }
 
   override protected def afterAll() {
-    cassandraProcess.destroyAndWaitForShutdown(5000)
+    cassandraProcess.foreach { cp =>
+      if(cp.destroyAndWaitForShutdown(5000) != 0) {
+        throw new RuntimeException("Could not stop cassandra!")
+      }
+    }
     shutdown(system, verifySystemShutdown = true)
   }
 
@@ -65,7 +74,7 @@ trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender wit
   import scala.concurrent.duration._
   import scala.language.postfixOps
 
-  protected val hosts = Set(InetAddress.getByName("localhost"))
+  protected val hosts: Set[InetAddress] = config.getStringList("athena.test.hosts").map(InetAddress.getByName)(collection.breakOut)
   protected val port = 9042
 
   protected def withClusterConnection[A](keyspace: Option[String] = None)(f: ActorRef => A): A = {
