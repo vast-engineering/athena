@@ -41,6 +41,10 @@ object QueryInterpolation {
       a => StatementRunner.streamRunner(q, rw.write(a))(rr)
     }
 
+    def asQueryNoArgs[B](implicit rr: RowReader[B]): StatementRunner[Enumerator[CvResult[B]]] = {
+      StatementRunner.streamRunner(q, Seq())(rr)
+    }
+
     def asUpdate[A](implicit rw: RowWriter[A]): A => StatementRunner[Future[Unit]] = {
       a => StatementRunner.unitRunner(q, rw.write(a))
     }
