@@ -11,19 +11,17 @@ import athena.data.CValue
 import scala.concurrent.duration._
 import scala.language.postfixOps
 
-import athena.TestData._
-import scala.util.control.NonFatal
 
 class ClusterConnectorSpec extends WordSpec with AthenaTest with Matchers {
 
   "A Cluster connector" should {
     "start up properly" in {
-      withClusterConnection(Hosts) { c =>
+      withClusterConnection() { c =>
       }
     }
 
     "execute a query" in {
-      withClusterConnection(Hosts) { connector =>
+      withClusterConnection() { connector =>
         val request = SimpleStatement("select * from testks.users")
         connector ! request
         val rows = expectMsgType[Rows]
@@ -41,7 +39,7 @@ class ClusterConnectorSpec extends WordSpec with AthenaTest with Matchers {
     }
 
     "use an explicit keyspace" in {
-      withClusterConnection(Hosts, Some("testks")) { connector =>
+      withClusterConnection(Some("testks")) { connector =>
 
         val request = SimpleStatement("select * from users")
         connector ! request

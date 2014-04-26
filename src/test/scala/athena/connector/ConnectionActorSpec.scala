@@ -5,22 +5,17 @@ import org.scalatest.{WordSpec, Matchers, WordSpecLike, BeforeAndAfterAll}
 import scala.concurrent.duration._
 
 import scala.language.postfixOps
-import akka.io.IO
 import athena.Requests.{FetchRows, SimpleStatement}
 import athena.Responses.Rows
 import athena.{AthenaTest, Athena}
 
-import athena.TestData._
-import akka.actor.ActorRef
 
 class ConnectionActorSpec extends WordSpec with AthenaTest with Matchers {
-
-  val hostAddress = Hosts.head.getHostAddress
 
   "A ConnectionActor" when {
     "uninitialized" should {
       "start up properly" in {
-        withConnection(hostAddress) { connection =>
+        withConnection() { connection =>
 
         }
       }
@@ -28,7 +23,7 @@ class ConnectionActorSpec extends WordSpec with AthenaTest with Matchers {
 
     "connected" should {
       "execute a query" in {
-        withConnection(hostAddress) { connectionActor =>
+        withConnection() { connectionActor =>
           val request = SimpleStatement("select * from testks.users")
           connectionActor ! request
           val rows = expectMsgType[Rows]
@@ -37,7 +32,7 @@ class ConnectionActorSpec extends WordSpec with AthenaTest with Matchers {
       }
 
       "properly page results" in {
-        withConnection(hostAddress) { connectionActor =>
+        withConnection() { connectionActor =>
           val request = SimpleStatement("select * from testks.users", fetchSize = Some(1))
           connectionActor ! request
           val rows = expectMsgType[Rows]
@@ -53,7 +48,7 @@ class ConnectionActorSpec extends WordSpec with AthenaTest with Matchers {
 
     "connected with a keyspace" should {
       "execute a query" in {
-        withConnection(hostAddress, Some("testks")) { keyspaceConnection =>
+        withConnection(Some("testks")) { keyspaceConnection =>
           val request = SimpleStatement("select * from users")
           keyspaceConnection ! request
           val rows = expectMsgType[Rows]
@@ -62,7 +57,7 @@ class ConnectionActorSpec extends WordSpec with AthenaTest with Matchers {
       }
 
       "properly page results" in {
-        withConnection(hostAddress, Some("testks")) { keyspaceConnection =>
+        withConnection(Some("testks")) { keyspaceConnection =>
           val request = SimpleStatement("select * from users", fetchSize = Some(1))
           keyspaceConnection ! request
           val rows = expectMsgType[Rows]

@@ -13,20 +13,19 @@ import athena.Responses.Rows
 import athena.{AthenaTest, Athena}
 import athena.data.CValue
 
-import athena.TestData._
 
 class NodeConnectorSpec extends WordSpec with AthenaTest with Matchers {
 
-  val hostAddress = Hosts.head.getHostAddress
+  val hostAddress = hosts.head.getHostAddress
 
   "A NodeConnector" should {
     "start up properly" in {
-      withNodeConnection(hostAddress) { connector =>
+      withNodeConnection() { connector =>
       }
     }
 
     "execute a query" in {
-      withNodeConnection(hostAddress) { connector =>
+      withNodeConnection() { connector =>
         val request = SimpleStatement("select * from testks.users")
         connector ! request
         val rows = expectMsgType[Rows]
@@ -44,7 +43,7 @@ class NodeConnectorSpec extends WordSpec with AthenaTest with Matchers {
     }
 
     "use an explicit keyspace" in {
-      withNodeConnection(hostAddress, Some("testks")) { connector =>
+      withNodeConnection(Some("testks")) { connector =>
         val request = SimpleStatement("select * from users")
         connector ! request
         val rows = expectMsgType[Rows]

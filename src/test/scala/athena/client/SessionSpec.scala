@@ -5,16 +5,13 @@ import play.api.libs.iteratee.Iteratee
 import scala.concurrent.{Await, Future}
 import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.Duration
-import athena.TestData._
-import akka.actor.ActorSystem
-import akka.event.Logging
 import athena.AthenaTest
 
 class SessionSpec extends WordSpec with AthenaTest with Matchers {
 
   "A Session" should {
     "execute a query" in {
-      val session = Session(Hosts, Port)
+      val session = Session(hosts, port)
 
       try {
         val aggregateRows = Await.result(session.execute("select * from testks.users"), Duration(10, TimeUnit.SECONDS))

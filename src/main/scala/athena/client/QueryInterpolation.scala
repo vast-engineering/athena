@@ -18,10 +18,14 @@ object QueryInterpolation {
     implicit def fromWrites[T](t: T)(implicit w: Writes[T]): ParamGenerator[T] = new ParamGenerator[T] {
       override def toParam: CValue = w.writes(t)
     }
+
   }
 
   implicit class QueryContext(val s: StringContext) extends AnyVal {
 
+    def i(args: Any*) = {
+
+    }
     def cql(paramGenerators: ParamGenerator[_]*) = {
       val params = paramGenerators.map(_.toParam)
       val query = s.parts.mkString("?")

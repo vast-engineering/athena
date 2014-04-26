@@ -9,7 +9,6 @@ import athena.connector.ClusterInfo.ClusterMetadata
 
 import scala.language.postfixOps
 
-import athena.TestData._
 import athena.connector.ClusterMonitorActor.ClusterReconnected
 
 class ClusterMonitorSpec extends WordSpec with AthenaTest with Matchers {
@@ -21,7 +20,7 @@ class ClusterMonitorSpec extends WordSpec with AthenaTest with Matchers {
 
   "The cluster monitor actor" should {
     "connect to the cluster" in {
-      val ref = TestActorRef(new ClusterMonitorActor(self, Hosts, Port, settings))
+      val ref = TestActorRef(new ClusterMonitorActor(self, hosts, port, settings))
       expectMsg(ClusterReconnected)
       expectMsgType[ClusterMetadata]
       akka.pattern.gracefulStop(ref, timeout.duration, Athena.Close)
