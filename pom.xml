@@ -192,8 +192,10 @@
                 <version>2.2.1</version>
                 <executions>
                     <execution>
+                        <id>attach-sources</id>
+                        <phase>verify</phase>
                         <goals>
-                            <goal>jar</goal>
+                            <goal>jar-no-fork</goal>
                         </goals>
                     </execution>
                 </executions>
