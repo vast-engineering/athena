@@ -12,6 +12,8 @@ licenses += "Apache License, Version 2.0" -> url("http://www.apache.org/licenses
 
 description := "A fully nonblocking and asynchronous client library for Cassandra."
 
+EclipseKeys.createSrc := EclipseCreateSrc.Default + EclipseCreateSrc.Resource
+
 resolvers += "Typesafe Repository" at "http://repo.typesafe.com/typesafe/releases/"
 
 resolvers += "spray repo" at "http://repo.spray.io"
@@ -30,7 +32,8 @@ libraryDependencies ++= Seq(
 	"com.chuusai" %% "shapeless" % "1.2.4",
 	"org.scalatest" %% "scalatest" % "2.0" % "test",
 	"org.slf4j" % "slf4j-api" % "1.7.5",
-	"org.slf4j" % "slf4j-jdk14" % "1.7.5"   
+	"org.slf4j" % "slf4j-jdk14" % "1.7.5",
+	"org.cassandraunit" % "cassandra-unit-spring" % "2.0.2.1"
 )
 
 
