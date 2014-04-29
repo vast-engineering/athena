@@ -23,9 +23,6 @@ object QueryInterpolation {
 
   implicit class QueryContext(val s: StringContext) extends AnyVal {
 
-    def i(args: Any*) = {
-
-    }
     def cql(paramGenerators: ParamGenerator[_]*) = {
       val params = paramGenerators.map(_.toParam)
       val query = s.parts.mkString("?")

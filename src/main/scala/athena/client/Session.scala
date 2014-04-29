@@ -22,9 +22,10 @@ import scala.concurrent.duration.{FiniteDuration, Duration}
 import scala.concurrent.{ExecutionContext, Future}
 import spray.util.LoggingContext
 import athena.client.pipelining.Pipeline
-import athena.util.Rate
+import athena.util.{LoggingSource, Rate}
 import athena.Responses.Rows
 import scala.util.control.NonFatal
+import akka.event.Logging
 
 trait Session {
 
@@ -64,7 +65,7 @@ object Session {
    * Create a session using an already existing (and assumed valid) Connection ActorRef.
    */
   def apply(connection: ActorRef, keyspace: String)
-           (implicit log: LoggingContext, ec: ExecutionContext): Session = {
+           (implicit logSource: LoggingSource, log: LoggingContext, ec: ExecutionContext): Session = {
     new SimpleSession(pipelining.pipeline(validateKeyspace(connection, keyspace)), keyspace) {
       /**
        * This method must be called to properly dispose of the Session.
@@ -158,10 +159,9 @@ object Session {
   }
 
   abstract class SimpleSession(pipeline: Pipeline, keyspace: String)
-                                      (implicit log: LoggingContext, ec: ExecutionContext) extends Session {
+                                      (implicit logSource: LoggingSource, log: LoggingContext, ec: ExecutionContext) extends Session {
 
-//    import SimpleSession._
-
+    private[this] val queryLog = logSource("query.SimpleSession")
     private[this] val queryPipe = pipelining.queryPipeline(pipeline)
     private[this] val streamPipe = pipelining.streamingPipeline(pipeline)
 
@@ -169,27 +169,25 @@ object Session {
                      values: Seq[CValue] = Seq(),
                      consistency: Option[Consistency] = None,
                      serialConsistency: Option[SerialConsistency] = None): Enumerator[Row] = {
-      // TODO: query and rate logging before and after streaming
-      streamPipe(SimpleStatement(query, values, Some(keyspace), consistency, serialConsistency))
+      queryLog.info("Streaming query {} with params {}", query, values)
+      val rate = new Rate
+      streamPipe(SimpleStatement(query, values, Some(keyspace), consistency, serialConsistency)).onDoneEnumerating {
+        queryLog.info(" Finished streaming query {} with params {} {}", query, values, rate)
+      }
     }
 
     def execute(query: String,
                 values: Seq[CValue] = Seq(),
                 consistency: Option[Consistency] = None,
                 serialConsistency: Option[SerialConsistency] = None): Future[Seq[Row]] = {
-//      queryLog.info("Executing query {} with params {}", query, values, "ignoredParam")
+      queryLog.info("Executing query {} with params {}", query, values)
       val rate = new Rate
-      queryPipe(SimpleStatement(query, values, Some(keyspace), consistency, serialConsistency))
-//      resultF.andThen {
-//        case _ => queryLog.info(" Executed query {} with params {} {}", query, values, rate)
-//      }
+      queryPipe(SimpleStatement(query, values, Some(keyspace), consistency, serialConsistency)).andThen {
+        case _ => queryLog.info(" Executed query {} with params {} {}", query, values, rate)
+      }
     }
 
   }
-
-//  object SimpleSession {
-//    private val queryLog = LoggerFactory.getLogger("query." + classOf[Session].getName)
-//  }
 
 }
 

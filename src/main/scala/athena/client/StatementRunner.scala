@@ -6,8 +6,6 @@ import athena.data.{CvResult, CValue}
 import athena.util.Rate
 
 trait StatementRunner[A] {
-  self =>
-
   def execute(implicit session: Session, ec: ExecutionContext): A
 }
 
@@ -33,10 +31,9 @@ object StatementRunner {
     override def execute(implicit session: Session, ec: ExecutionContext): Future[Seq[CvResult[A]]] = {
       //queryLog.info("Executing query {} with params {}", query, args, "ignoredParam")
       val rate = new Rate
-      val resultF = session.execute(query, args).map(rows => rows.map(rr.read(_)))
-      resultF.map { result =>
-        //queryLog.info(" Executed query {} with params {}", query, args, rate)
-        result
+      session.execute(query, args).map(rows => rows.map(rr.read(_))).andThen {
+        case _ =>
+          //queryLog.info(" Executed query {} with params {}", query, args, rate)
       }
     }
   }
