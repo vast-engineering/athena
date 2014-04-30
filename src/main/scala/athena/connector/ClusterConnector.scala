@@ -24,6 +24,7 @@ import athena.connector.ClusterInfo.ClusterMetadata
 import spray.util.LoggingContext
 import athena.data.PreparedStatementDef
 import akka.util.ByteString
+import akka.actor.Status.Failure
 
 private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnectorSetup) extends Actor with ActorLogging {
 
@@ -429,6 +430,11 @@ private[athena] object ClusterConnector {
               sendResponse(resp)
               context.stop(self)              
             }
+
+          case x: Failure =>
+            log.debug("Received failure response to request {}", request)
+            respondTo.tell(x, context.parent)
+            context.stop(self)
 
           case x =>
             log.error("Received unknown response to request - {}", x)

@@ -5,7 +5,7 @@ import akka.actor._
 import athena.Athena._
 import athena.{ConnectionSettings, NodeConnectorSettings, Responses, Athena}
 import athena.Requests.{KeyspaceAwareRequest, AthenaRequest}
-import athena.Responses.AthenaResponse
+import athena.Responses.{Timedout, RequestFailed, AthenaResponse, ConnectionUnavailable}
 
 import java.net.InetSocketAddress
 import java.util.concurrent.TimeUnit
@@ -14,13 +14,14 @@ import scala.concurrent.duration.{Duration, FiniteDuration}
 import akka.util.{Timeout, ByteString}
 import athena.Athena.NodeDisconnected
 import athena.Athena.NodeConnected
-import athena.Responses.ConnectionUnavailable
 import athena.data.PreparedStatementDef
 import akka.actor.Terminated
 import athena.connector.ConnectionActor.{ConnectionCommandFailed, KeyspaceChanged, SetKeyspace}
 import scala.util.control.NonFatal
 import akka.event.LoggingReceive
 import athena.connector.ClusterConnector.CheckKeyspace
+import scala.concurrent.Future
+import scala.util.{Failure, Success}
 
 /**
  * Manages a pool of connections to a single Cassandra node. This Actor takes incoming requests and dispatches
@@ -301,12 +302,7 @@ private[athena] class NodeConnector(commander: ActorRef,
 
       leastBusy.fold(false) {
         case (connection, _) =>
-          //fire off a request actor
-          context.actorOf(
-            props = RequestActor.props(pendingRequest.request, connection, pendingRequest.respondTo, settings.connectionSettings.requestTimeout),
-            name = "request-actor-" + counter.next()
-          )
-
+          sendRequest(pendingRequest, connection)
           incrementConnection(connection)
           true
       }
@@ -544,6 +540,39 @@ private[athena] class NodeConnector(commander: ActorRef,
     liveConnections.keySet.map(shutdownConnection(_, command))
   }
 
+  private def sendRequest(request: PendingRequest, connection: ActorRef) {
+
+    import akka.pattern._
+
+    val requestF: Future[AthenaResponse] = connection.ask(request.request)(defaultTimeout).map {
+      case resp: AthenaResponse =>
+        resp
+      case unknown =>
+        log.error("Unknown response to request - {}", unknown)
+        throw new InternalException(s"Unknown response to request. Request - ${request.request} Response - $unknown")
+    } recover {
+      case e: AskTimeoutException =>
+        log.error("Request timed out!")
+        Timedout(request.request)
+    }
+
+    requestF.onComplete {
+      case Success(response) =>
+        if(response.isFailure) {
+          log.debug("Sending {} failed, notifying connection holder.", request.request)
+          self ! Disconnect
+        }
+        self ! RequestCompleted(connection)
+      case Failure(e) =>
+        log.error("Request threw exception {}", e)
+        self ! RequestCompleted(connection)
+    }
+
+    requestF.pipeTo(request.respondTo)(self)
+
+  }
+
+
 }
 
 private[athena] object NodeConnector {
@@ -612,59 +641,6 @@ private[athena] object NodeConnector {
         log.error("Timed out waiting for connection.")
         context.parent ! ConnectionAttemptFailed(keyspace, None)
         context.stop(self)
-    }
-  }
-
-  private class RequestActor(req: AthenaRequest, connection: ActorRef, respondTo: ActorRef, requestTimeout: Duration) extends Actor with ActorLogging {
-
-    //request actors should not restart - they are fire and forget, one and done
-    override def supervisorStrategy = SupervisorStrategy.stoppingStrategy
-
-    override def preStart(): Unit = {
-      context.watch(connection)
-      context.setReceiveTimeout(requestTimeout)
-      connection ! req
-    }
-
-    def sendResponse(r: AthenaResponse) {
-      respondTo.tell(r, context.parent)
-    }
-
-    def receive: Actor.Receive = {
-      case resp: AthenaResponse =>
-        //log.debug("Delivering {} for {}", resp, req)
-        sendResponse(resp)
-
-        //notify the parent if the request failed - they should close the connection
-        if(resp.isFailure) {
-          notifyParent()
-        }
-        context.stop(self)
-
-      case Terminated(`connection`) ⇒
-        sendResponse(Responses.RequestFailed(req))
-        context.stop(self)
-
-      case ReceiveTimeout =>
-        sendResponse(Responses.Timedout(req))
-        notifyParent()
-        context.stop(self)
-    }
-
-    override def postStop(): Unit = {
-      context.parent ! RequestCompleted(connection)
-    }
-
-    private def notifyParent() {
-      log.debug("Sending {} failed, notifying connection holder.", req)
-      context.parent ! Disconnect
-    }
-
-  }
-
-  private object RequestActor {
-    def props(req: AthenaRequest, connection: ActorRef, respondTo: ActorRef, requestTimeout: Duration): Props = {
-      Props[RequestActor](new RequestActor(req, connection, respondTo, requestTimeout))
     }
   }
 }
