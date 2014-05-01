@@ -403,7 +403,7 @@ private[athena] object ClusterConnector {
 
           case Responses.ErrorResponse(stmt: Requests.BoundStatement, Errors.UnpreparedError(_, _, _)) if retryUnprepared =>
             //well, this is awkward. Attempt to prepare the statement, then re-execute the query.
-            log.warning("Received unprepared error for bound statement. Re-preparing and retrying request. {}", stmt)
+            log.debug("Received unprepared error for bound statement. Re-preparing and retrying request. {}", stmt)
             host.connection ! Requests.Prepare(stmt.statementDef.rawQuery, stmt.statementDef.keyspace)
             context.become {
               case Responses.Prepared(_, preparedStmt) =>

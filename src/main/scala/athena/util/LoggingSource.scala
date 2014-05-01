@@ -7,17 +7,22 @@ trait LoggingSource {
   def apply(category: String): LoggingAdapter
 }
 
-object LoggingSource {
+trait DefaultLoggingSource extends LSLowPriorityImplicits {
+
+  import scala.language.implicitConversions
 
   implicit def fromActorRefFactory(implicit refFactory: ActorRefFactory): LoggingSource =
-    refFactory match {
-      case x: ActorSystem  ⇒ fromSystem(x)
-      case x: ActorContext ⇒ fromActorContext(x)
-    }
+    fromSystem(spray.util.actorSystem(refFactory))
 
-  def fromActorContext(context: ActorContext) = fromSystem(context.system)
-  def fromSystem(implicit system: ActorSystem): LoggingSource = new LoggingSource {
-    override def apply(category: String): LoggingAdapter = Logging(system, category)
-  }
 
 }
+
+trait LSLowPriorityImplicits {
+  self: DefaultLoggingSource =>
+
+  implicit def fromSystem(implicit system: ActorSystem): LoggingSource = new LoggingSource {
+    override def apply(category: String): LoggingAdapter = Logging(system, category)
+  }
+}
+
+object LoggingSource extends DefaultLoggingSource
