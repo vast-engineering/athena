@@ -5,11 +5,11 @@ import play.api.libs.iteratee.Iteratee
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
 import athena.AthenaTest
+import athena.data.CvResult
 
 class InterpTest extends WordSpec with AthenaTest {
 
   import QueryInterpolation._
-
   import RowReader._
 
   case class TestRes(a: String, b: String)
@@ -21,7 +21,10 @@ class InterpTest extends WordSpec with AthenaTest {
       log.info("Starting query.")
 
       val id = 1234
-      val foo = await(cql"select * from users where id = $id".as[(Long, String)].execute.run(Iteratee.getChunks))
+      val rowMapper = Iteratee.getChunks[CvResult[(Long, String, String)]].map { result =>
+        result.map(_.get)
+      }
+      val foo = await(cql"select id, first_name, last_name from users where id = $id".as[(Long, String, String)].execute.run(rowMapper))
 
       log.info("Finished query with result {}", foo)
       session.close()

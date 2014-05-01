@@ -6,26 +6,25 @@ import akka.pattern._
 import akka.util.Timeout
 import akka.actor.Status.Failure
 
-import athena.{SerialConsistency, Consistency, Athena}
+import athena.{Responses, Athena}
 
 import play.api.libs.iteratee.Enumerator
 
-import athena.data.{CVarChar, CValue}
+import athena.data.{PreparedStatementDef, CVarChar, CValue}
 import athena.Consistency.Consistency
 import athena.SerialConsistency.SerialConsistency
 import athena.Athena.AthenaException
-import athena.Requests.SimpleStatement
+import athena.Requests.{BoundStatement, Prepare, SimpleStatement}
 
 import java.util.concurrent.TimeUnit
 import java.net.InetAddress
 import scala.concurrent.duration.{FiniteDuration, Duration}
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.{Promise, ExecutionContext, Future}
 import spray.util.LoggingContext
 import athena.client.pipelining.Pipeline
 import athena.util.{LoggingSource, Rate}
 import athena.Responses.Rows
 import scala.util.control.NonFatal
-import akka.event.Logging
 
 trait Session {
 
@@ -38,8 +37,13 @@ trait Session {
                     consistency: Option[Consistency] = None,
                     serialConsistency: Option[SerialConsistency] = None): Enumerator[Row]
 
+  def streamPrepared(statement: PreparedStatementDef,
+                    values: Seq[CValue] = Seq(),
+                    consistency: Option[Consistency] = None,
+                    serialConsistency: Option[SerialConsistency] = None): Enumerator[Row]
+
   /**
-   * Execute a query intended to update data. As opposed to the method above, this method 
+   * Execute a query. As opposed to the method above, this method
    * executes the query immediately. This also aggregates any and all result rows into memory. This 
    * avoids the need to stream rows, but be aware that if the query returns a large row count, they will
    * all be buffered in memory.
@@ -49,6 +53,12 @@ trait Session {
               consistency: Option[Consistency] = None,
               serialConsistency: Option[SerialConsistency] = None): Future[Seq[Row]]
 
+  def executePrepared(statement: PreparedStatementDef,
+              values: Seq[CValue] = Seq(),
+              consistency: Option[Consistency] = None,
+              serialConsistency: Option[SerialConsistency] = None): Future[Seq[Row]]
+
+  def prepare(query: String): Future[PreparedStatementDef]
 
   /**
    * This method must be called to properly dispose of the Session.
@@ -176,6 +186,18 @@ object Session {
       }
     }
 
+    def streamPrepared(statement: PreparedStatementDef,
+                      values: Seq[CValue] = Seq(),
+                      consistency: Option[Consistency] = None,
+                      serialConsistency: Option[SerialConsistency] = None): Enumerator[Row] = {
+      val bound = BoundStatement(statement, values, None, consistency, serialConsistency)
+      queryLog.info("Streaming prepared query {} with params {}", statement.rawQuery, values)
+      val rate = new Rate
+      streamPipe(bound).onDoneEnumerating {
+        queryLog.info(" Finished streaming prepared query {} with params {} {}", statement.rawQuery, values, rate)
+      }
+    }
+
     def execute(query: String,
                 values: Seq[CValue] = Seq(),
                 consistency: Option[Consistency] = None,
@@ -187,6 +209,48 @@ object Session {
       }
     }
 
+    def executePrepared(statement: PreparedStatementDef,
+                values: Seq[CValue] = Seq(),
+                consistency: Option[Consistency] = None,
+                serialConsistency: Option[SerialConsistency] = None): Future[Seq[Row]] = {
+      val bound = BoundStatement(statement, values, None, consistency, serialConsistency)
+      queryLog.info("Streaming prepared query {} with params {}", statement.rawQuery, values)
+      val rate = new Rate
+      queryPipe(bound).andThen {
+        case _ => queryLog.info(" Finished streaming prepared query {} with params {} {}", statement.rawQuery, values, rate)
+      }
+    }
+
+    def prepare(query: String): Future[PreparedStatementDef] = {
+      getStatement(query) {
+        log.debug("Session preparing statement.")
+        pipeline(Prepare(query, Some(keyspace))).map {
+          case Responses.Prepared(_, statementDef) => statementDef
+
+          case unknown =>
+            throw new AthenaException(s"Unknown response to prepare request - $unknown")
+        }
+      }
+    }
+
+    import collection.JavaConversions._
+    private[this] val statementCache: collection.concurrent.Map[String, Future[PreparedStatementDef]] =
+      new java.util.concurrent.ConcurrentHashMap[String, Future[PreparedStatementDef]]()
+
+    private def getStatement(key: String)(genValue: => Future[PreparedStatementDef]): Future[PreparedStatementDef] = {
+      val promise = Promise[PreparedStatementDef]()
+      statementCache.putIfAbsent(key, promise.future) match {
+        case None =>
+          val future = genValue
+          future.onComplete { value =>
+            promise.complete(value)
+            // in case of exceptions we remove the cache entry (i.e. try again later)
+            if (value.isFailure) statementCache.remove(key, promise)
+          }
+          future
+        case Some(existingFuture) => existingFuture
+      }
+    }
   }
 
 }

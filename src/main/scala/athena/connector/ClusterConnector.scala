@@ -1,6 +1,6 @@
 package athena.connector
 
-import athena.{Errors, Responses, Athena}
+import athena.{Requests, Errors, Responses, Athena}
 import akka.actor._
 import akka.pattern._
 import athena.Requests.AthenaRequest
@@ -25,6 +25,7 @@ import spray.util.LoggingContext
 import athena.data.PreparedStatementDef
 import akka.util.ByteString
 import akka.actor.Status.Failure
+import athena.util.MD5Hash
 
 private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnectorSetup) extends Actor with ActorLogging {
 
@@ -58,7 +59,7 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
 
   private[this] var currentStatus: ClusterStatusEvent = ClusterDisconnected
 
-  private[this] var preparedStatements: Map[ByteString, PreparedStatementDef] = Map.empty
+  private[this] var preparedStatements: Map[MD5Hash, PreparedStatementDef] = Map.empty
 
   private[this] val defaultBehavior: Receive = {
     case req: AthenaRequest =>
@@ -292,7 +293,7 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
     //watch the pool actor, if it dies, so do we.
     val pool = context.watch {
       context.actorOf(
-        props = NodeConnector.props(self, new InetSocketAddress(host, setup.port), settings.localNodeSettings),
+        props = NodeConnector.props(self, new InetSocketAddress(host, setup.port), settings.localNodeSettings, preparedStatements),
         name = "node-connector-" + actorNameIndex.next() + "-" + host.getHostAddress
       )
     }
@@ -377,21 +378,13 @@ private[athena] object ClusterConnector {
     // may depend on the number of attempts. A query sent to a node that is unreachable shouldn't count
     // against this total.
     def attemptRequest(request: AthenaRequest, retryCount: Int = 0) {
-      if(!plan.hasNext) {
-        //out of options here,
-        //note - this uses the original request, not the updated one in 'request' that
-        // may have been copied and updated by the retry logic.
-        sendResponse(NoHostsAvailable(originalRequest, errors))
-        context.stop(self)
-      } else {
-        val host = plan.next()
-        log.debug("Using host {} for request.", host)
-        host.connection ! request
 
+      def sendRequest(host: ConnectedHost, retryUnprepared: Boolean = true) {
+
+        host.connection ! request
         context.become {
 
           case x if sender() != host.connection =>
-            val s = sender()
             log.warning("Received response from an unexpected host. This could be due to a previous timeout.")
             log.warning("Discarding response - {}", x)
 
@@ -402,11 +395,39 @@ private[athena] object ClusterConnector {
             // error with the query or state of the cluster itself
             attemptRequest(request, retryCount)
 
-          case x@ErrorResponse(_, Errors.IsBootstrappingError(msg, errorHost)) =>
+          case ErrorResponse(_, Errors.IsBootstrappingError(msg, errorHost)) =>
             log.error("Query sent to {} but it is bootstrapping. This shouldn't happen but trying next host. Message - {}", errorHost, msg)
             //note this does not increment the retry count on purpose - it's not an
             // error with the query or state of the cluster itself
             attemptRequest(request, retryCount)
+
+          case Responses.ErrorResponse(stmt: Requests.BoundStatement, Errors.UnpreparedError(_, _, _)) if retryUnprepared =>
+            //well, this is awkward. Attempt to prepare the statement, then re-execute the query.
+            log.warning("Received unprepared error for bound statement. Re-preparing and retrying request. {}", stmt)
+            host.connection ! Requests.Prepare(stmt.statementDef.rawQuery, stmt.statementDef.keyspace)
+            context.become {
+              case Responses.Prepared(_, preparedStmt) =>
+                log.debug("Re-prepared statement - {}", preparedStmt.rawQuery)
+                sendRequest(host, retryUnprepared = false)
+
+              case resp: AthenaResponse if resp.isFailure =>
+                //try the next host
+                errors = errors.updated(host.addr, resp)
+                attemptRequest(request, retryCount)
+
+              case resp: AthenaResponse if resp.isFailure =>
+                sendResponse(Responses.ErrorResponse(request, InternalError(s"Unexpected response to request - $resp")))
+                context.stop(self)
+
+              case x: Failure =>
+                log.warning("Received failure response to request {}. This shouldn't happen.", request)
+                respondTo.tell(x, context.parent)
+                context.stop(self)
+
+              case unknown =>
+                sendResponse(Responses.ErrorResponse(request, InternalError(s"Unexpected response to request - $unknown")))
+                context.stop(self)
+            }
 
           //TODO: handle read and write timeout errors
           // read and write timeouts should increment the retryCount if they fail.
@@ -428,20 +449,30 @@ private[athena] object ClusterConnector {
               attemptRequest(request, retryCount)
             } else {
               sendResponse(resp)
-              context.stop(self)              
+              context.stop(self)
             }
 
           case x: Failure =>
-            log.debug("Received failure response to request {}", request)
+            log.warning("Received failure response to request {}. This shouldn't happen.", request)
             respondTo.tell(x, context.parent)
             context.stop(self)
 
-          case x =>
-            log.error("Received unknown response to request - {}", x)
-            sendResponse(RequestFailed(originalRequest))
+          case unknown =>
+            log.error("Received unknown response to request - {}", unknown)
+            sendResponse(Responses.ErrorResponse(request, InternalError(s"Unexpected response to request - $unknown")))
             context.stop(self)
         }
+      }
 
+
+      if(!plan.hasNext) {
+        //out of options here,
+        //note - this uses the original request, not the updated one in 'request' that
+        // may have been copied and updated by the retry logic.
+        sendResponse(NoHostsAvailable(originalRequest, errors))
+        context.stop(self)
+      } else {
+        sendRequest(plan.next())
       }
     }
 

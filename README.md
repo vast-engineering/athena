@@ -8,8 +8,6 @@ What doesn't work yet -
 
 * Authentication
 * Connection compression
-* Prepared statements
-* Changing keyspaces
 * Intelligent (key aware) query routing
 
 

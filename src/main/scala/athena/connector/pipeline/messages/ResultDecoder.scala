@@ -3,7 +3,7 @@ package athena.connector.pipeline.messages
 import athena._
 import athena.connector._
 import athena.data.{ColumnDef, DataType, Metadata}
-import athena.util.ByteStringUtils
+import athena.util.{MD5Hash, ByteStringUtils}
 import CassandraResponses._
 
 import akka.util.{ByteString, ByteIterator}
@@ -99,7 +99,7 @@ private object ResultDecoder {
     val id = ByteStringUtils.readShortBytes(it)
     val meta = decodeMetaData(it)
     val resultMetadata = decodeMetaData(it)
-    PreparedResult(id, meta, resultMetadata)
+    PreparedResult(MD5Hash(id), meta, resultMetadata)
   }
 
   def decodeSchemaChange(it: ByteIterator)(implicit bo: ByteOrder): SchemaChange = {

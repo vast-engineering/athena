@@ -38,7 +38,7 @@ object RowReader {
     override def read(cvalue: Row): CvResult[T] = {
       cvalue(index).map { x =>
         r.read(x).recover {
-          case CvError(errors) => CvError(errors.map(x => s"Error reading column $index: $x"))
+          case CvError(errors) => CvError(errors.map(error => s"Error reading column $index: value: $x error: $error"))
         }
       } getOrElse {
         CvError(s"Invalid column index $index")
@@ -50,7 +50,7 @@ object RowReader {
     override def read(cvalue: Row): CvResult[T] = {
       cvalue(name).map { x =>
         r.read(x).recover {
-          case CvError(errors) => CvError(errors.map(x => s"Error reading column '$name': $x"))
+          case CvError(errors) => CvError(errors.map(error => s"Error reading column '$name': value: $x error: $error"))
         }
       } getOrElse {
         CvError(s"Invalid column $name")

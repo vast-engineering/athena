@@ -52,12 +52,6 @@ object Athena extends ExtensionKey[AthenaExt] {
   case class Connect(remoteAddress: InetSocketAddress,
                      settings: Option[ConnectionSettings] = None,
                      initialKeyspace: Option[String] = None) extends ConnectionCreationCommand
-//  object Connect {
-//    def apply(host: String, port: Int, settings: Option[ConnectionSettings], initialKeyspace: Option[String] = None): Connect = {
-//      val address = new InetSocketAddress(host, port)
-//      Connect(address, settings)
-//    }
-//  }
 
   /**
    * Must be sent to a connection actor after the receipt of a Conneced event. All further communication will be with teh

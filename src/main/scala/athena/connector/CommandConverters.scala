@@ -102,7 +102,7 @@ private object CommandConverters {
         throw new IllegalStateException("Invalid response for simple statement.")
 
       case (stmt: BoundStatement, RowsResult(Metadata(_, columnsOpt, pagingState), data)) =>
-        Rows(stmt, columnsOpt.getOrElse(stmt.statementDef.parameterDefs), data, pagingState)
+        Rows(stmt, columnsOpt.getOrElse(stmt.statementDef.resultDefs), data, pagingState)
 
       case (stmt: BoundStatement, _) =>
         throw new IllegalStateException("Invalid response for bound statement.")

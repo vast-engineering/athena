@@ -3,7 +3,7 @@ package athena.connector.pipeline.messages
 import athena._
 import akka.util.ByteString
 import java.nio.ByteOrder
-import athena.util.ByteStringUtils
+import athena.util.{MD5Hash, ByteStringUtils}
 import java.net.InetSocketAddress
 
 import athena.connector.CassandraResponses._
@@ -58,7 +58,7 @@ private[pipeline] object ResponseDecoder {
         val length = it.getShort
         val bytes = it.take(length).toByteString
         it.drop(length)
-        UnpreparedError(message, host, bytes)
+        UnpreparedError(message, host, MD5Hash(bytes))
       case x =>
         throw new Athena.InternalException(s"Unknown error code $x")
     }

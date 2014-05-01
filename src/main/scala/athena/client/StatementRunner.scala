@@ -11,29 +11,40 @@ trait StatementRunner[A] {
 
 object StatementRunner {
 
-  //private val queryLog = LoggerFactory.getLogger("query." + classOf[StatementRunner[Any]].getName)
-
-  def unitRunner(query: String, args: Seq[CValue]): StatementRunner[Future[Unit]] = new StatementRunner[Future[Unit]] {
+  def unitRunner(query: String, args: Seq[CValue], usePreparedStatement: Boolean = true): StatementRunner[Future[Unit]] = new StatementRunner[Future[Unit]] {
     override def execute(implicit session: Session, ec: ExecutionContext): Future[Unit] = {
-      //queryLog.info("Executing query {} with params {}", query, args, "ignoredParam")
-      session.executeStream(query, args).run(Iteratee.head).map(_ => ())
+      if(usePreparedStatement) {
+        session.prepare(query).flatMap { ps =>
+          session.streamPrepared(ps, args).run(Iteratee.head).map(_ => ())
+        }
+      } else {
+        session.executeStream(query, args).run(Iteratee.head).map(_ => ())
+      }
     }
   }
 
-  def streamRunner[A](query: String, args: Seq[CValue])(implicit rr: RowReader[A]) = new StatementRunner[Enumerator[CvResult[A]]] {
+  def streamRunner[A](query: String, args: Seq[CValue], usePreparedStatement: Boolean = true)(implicit rr: RowReader[A]) = new StatementRunner[Enumerator[CvResult[A]]] {
     override def execute(implicit session: Session, ec: ExecutionContext): Enumerator[CvResult[A]] = {
-      //queryLog.info("Executing query {} with params {}", query, args, "ignoredParam")
-      session.executeStream(query, args).map(rr.read)
+      if(usePreparedStatement) {
+        Enumerator.flatten {
+          session.prepare(query).map { ps =>
+            session.streamPrepared(ps, args).map(rr.read)
+          }
+        }
+      } else {
+        session.executeStream(query, args).map(rr.read)
+      }
     }
   }
 
-  def seqRunner[A](query: String, args: Seq[CValue])(implicit rr: RowReader[A]) = new StatementRunner[Future[Seq[CvResult[A]]]] {
+  def seqRunner[A](query: String, args: Seq[CValue], usePreparedStatement: Boolean = true)(implicit rr: RowReader[A]) = new StatementRunner[Future[Seq[CvResult[A]]]] {
     override def execute(implicit session: Session, ec: ExecutionContext): Future[Seq[CvResult[A]]] = {
-      //queryLog.info("Executing query {} with params {}", query, args, "ignoredParam")
-      val rate = new Rate
-      session.execute(query, args).map(rows => rows.map(rr.read(_))).andThen {
-        case _ =>
-          //queryLog.info(" Executed query {} with params {}", query, args, rate)
+      if(usePreparedStatement) {
+        session.prepare(query).flatMap { ps =>
+          session.executePrepared(ps, args).map(rows => rows.map(rr.read))
+        }
+      } else {
+        session.execute(query, args).map(rows => rows.map(rr.read))
       }
     }
   }

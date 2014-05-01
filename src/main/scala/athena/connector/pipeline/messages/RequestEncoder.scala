@@ -18,7 +18,7 @@ private[connector] object RequestEncoder {
       case QueryRequest(query, params) =>
         (RequestOpcodes.QUERY, ByteStringUtils.writeLongString(query) ++ encodeQueryParams(params))
       case ExecuteRequest(statementId, params, excludeMetadata) =>
-        (RequestOpcodes.EXECUTE, ByteStringUtils.shortBytes(statementId) ++ encodeQueryParams(params, excludeMetadata))
+        (RequestOpcodes.EXECUTE, ByteStringUtils.shortBytes(statementId.toByteString) ++ encodeQueryParams(params, excludeMetadata))
       case Register(eventNames) =>
         (RequestOpcodes.REGISTER, ByteStringUtils.writeStringList(eventNames.map(_.toString)))
       case Prepare(query) =>

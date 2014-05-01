@@ -55,11 +55,12 @@ object Requests {
   //used internally - should only be able to be constructed by binding a PreparedStatementDef to a set of parameters
   private[athena] case class BoundStatement(statementDef: PreparedStatementDef,
                                             values: Seq[CValue] = Seq.empty,
-                                            keyspace: Option[String] = None,
                                             routingKey: Option[ByteString] = None,
                                             consistency: Option[Consistency] = None,
                                             serialConsistency: Option[SerialConsistency] = None,
-                                            fetchSize: Option[Int] = None) extends Statement
+                                            fetchSize: Option[Int] = None) extends Statement {
+    override val keyspace: Option[String] = statementDef.keyspace
+  }
 
   /**
    * A command that will create a prepared statement.

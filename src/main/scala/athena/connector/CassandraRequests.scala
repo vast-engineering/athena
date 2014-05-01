@@ -5,6 +5,7 @@ import athena.data._
 import athena.{ClusterEventName, SerialConsistency, Consistency}
 import Consistency._
 import SerialConsistency._
+import athena.util.MD5Hash
 
 /**
  * A base trait for all Cassandra requests - these map 1:1 to opcodes defined here -
@@ -28,7 +29,7 @@ private[connector] object CassandraRequests {
                          pagingState: Option[ByteString] = None)
 
   case class QueryRequest(query: String, params: QueryParams) extends CassandraRequest
-  case class ExecuteRequest(statementId: ByteString, params: QueryParams, excludeMetadata: Boolean) extends CassandraRequest
+  case class ExecuteRequest(statementId: MD5Hash, params: QueryParams, excludeMetadata: Boolean) extends CassandraRequest
 
   case class Register(eventNames: Seq[ClusterEventName]) extends CassandraRequest
 

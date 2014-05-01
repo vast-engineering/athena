@@ -19,7 +19,7 @@ import scala.concurrent.duration.{FiniteDuration, Duration, DurationInt}
 import scala.collection.mutable
 
 import scala.language.postfixOps
-import athena.Responses.{Timedout, RequestFailed}
+import athena.Responses.{AthenaResponse, Timedout, RequestFailed}
 import athena.connector.CassandraRequests.{CassandraRequest, QueryParams, QueryRequest}
 import athena.Requests.{KeyspaceAwareRequest, AthenaRequest}
 import athena.connector.CassandraResponses.{Ready, KeyspaceResult, CassandraResponse, ClusterEvent}
@@ -380,12 +380,19 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
       }
 
       def sendRequest(ctx: CommandContext) {
-        if(!writesEnabled) {
+        if (!writesEnabled) {
+          ctx.respondTo ! unavailableResponse(ctx.command)
+        } else if (exclusiveMode) {
+          //we cannot accept any new requests - bounce the current one
           ctx.respondTo ! unavailableResponse(ctx.command)
         } else {
-          if(exclusiveMode) {
-            //we cannot accept any new requests - bounce the current one
-            ctx.respondTo ! unavailableResponse(ctx.command)
+          //validate request commands
+          val invalidResponse = ctx.command match {
+            case RequestCommand(request) => validateRequest(request)
+            case _ => None
+          }
+          if(invalidResponse.isDefined) {
+            ctx.respondTo ! invalidResponse.get
           } else {
             requestTracker.addRequest(ctx).fold(ctx.respondTo ! errorResponse(ctx.command)) { streamId =>
               pipelineHandler ! init.command(RequestEnvelope(streamId, cassandraRequest(ctx.command)))
@@ -413,23 +420,8 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
       def running(): State = {
 
         state {
-          case req: KeyspaceAwareRequest =>
-            val requestKs = req.keyspace
-            val compatible = if(requestKs.isEmpty) true else {
-              keyspace.exists(_ == requestKs.get)
-            }
-            val respondTo = sender()
-            if(!compatible) {
-              log.error("Cannot process request on connection with incompatible keyspace. Request ks - {} connection ks - {}", requestKs, keyspace)
-              respondTo ! Responses.InvalidRequest(req)
-            } else {
-              sendRequest(CommandContext(RequestCommand(req), respondTo))
-            }
-            stay()
-
           case req: AthenaRequest =>
-            val ctx = CommandContext(RequestCommand(req), sender())
-            sendRequest(ctx)
+            sendRequest(CommandContext(RequestCommand(req), sender()))
             stay()
 
           case cmd: ConnectionCommand =>
@@ -612,6 +604,29 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
 
   }
 
+  private def validateRequest(request: AthenaRequest): Option[AthenaResponse] = {
+    val checkForUseQuery: Option[String] = request match {
+      case q: Requests.SimpleStatement => Some(q.query)
+      case q: Requests.Prepare => Some(q.query)
+      case _ => None
+    }
+
+    checkForUseQuery.filter(_.trim.toUpperCase.startsWith("USE")).map { _ =>
+      log.error("USE queries are explicitly disallowed.")
+      Responses.ErrorResponse(request, Errors.SyntaxError("USE queries are not allowed. Please specify the keyspace on the statement request."))
+    } orElse {
+      //check for a compatible keyspace
+      request match {
+        case req: KeyspaceAwareRequest =>
+          //if the request has a keyspace, it must exactly match the current keyspace of this connection
+          req.keyspace.filterNot(requestKs => keyspace.exists(_ == requestKs)).map { ks =>
+            log.error("Cannot process request on connection with incompatible keyspace. Request ks - {} connection ks - {}", req.keyspace, keyspace)
+            Responses.InvalidRequest(req)
+          }
+        case _ => None
+      }
+    }
+  }
 
 }
 
@@ -655,6 +670,7 @@ private[connector] object ConnectionActor {
   }
   case class KeyspaceChanged(keyspace: String)
 
+  //used to wrap Athena query reqeusts
   private[ConnectionActor] case class RequestCommand(request: AthenaRequest) extends ConnectionCommand  {
     override val isExclusive: Boolean = false
   }

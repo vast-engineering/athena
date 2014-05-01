@@ -3,7 +3,39 @@ package athena.util
 import java.lang.reflect.Constructor
 import akka.util.ByteString
 import scala.util.control.NonFatal
+import java.util
 
+class MD5Hash private (val data: Array[Byte]) {
+
+  def toByteString: ByteString = ByteString(data)
+
+  override def hashCode(): Int = {
+    util.Arrays.hashCode(data)
+  }
+  override def equals(obj: scala.Any): Boolean = {
+    if(obj == null) {
+      false
+    } else {
+      obj match {
+        case that: MD5Hash => util.Arrays.equals(data, that.data)
+        case _ => false
+      }
+    }
+  }
+
+  override def toString: String = s"MD5Hash(${Bytes.toHexString(data)})"
+}
+
+object MD5Hash {
+
+  def apply(bs: ByteString): MD5Hash = new MD5Hash(bs.toArray)
+
+  def apply(arr: Array[Byte]): MD5Hash = {
+    val data = Array.ofDim[Byte](arr.length)
+    Array.copy(arr, 0, data, 0, arr.length)
+    new MD5Hash(data)
+  }
+}
 /**
  * Simple utility methods to make working with bytes (blob) easier.
  */
@@ -112,8 +144,8 @@ object Bytes  {
   }
 
   private final val charToByte: Array[Byte] = {
-    val bytes = new Array[Byte](256)
-    for(c <- 0 to bytes.length) {
+    val bytes = Array.ofDim[Byte](256)
+    for(c <- 0 until bytes.length) {
       if (c >= '0' && c <= '9')
         bytes(c) = (c - '0').toByte
       else if (c >= 'A' && c <= 'F')
@@ -127,7 +159,7 @@ object Bytes  {
   }
   private final val byteToChar: Array[Char] = {
     val chars = new Array[Char](16)
-    for(i <- 0 to chars.length) {
+    for(i <- 0 until chars.length) {
       chars(i) = Integer.toHexString(i).charAt(0)
     }
     chars
