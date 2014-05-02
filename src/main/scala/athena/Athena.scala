@@ -211,12 +211,6 @@ object Athena extends ExtensionKey[AthenaExt] {
     override def isAborted = true
   }
   /**
-   * The peer has closed its writing half of the connection.
-   */
-  case object ServerClosed extends ConnectionClosed {
-    override def isServerClosed = true
-  }
-  /**
    * The connection has been closed due to an IO error.
    */
   case class ErrorClosed(cause: String) extends ConnectionClosed {

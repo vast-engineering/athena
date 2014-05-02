@@ -85,17 +85,16 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
         log.debug("Attempting connection to {}", host.addr)
         val connectionSettings = settings.localNodeSettings.connectionSettings
         val address = new InetSocketAddress(host.addr, port)
-        IO(Athena) ! Athena.Connect(address, Some(connectionSettings))
-        
+        val connection = context.actorOf(ConnectionActor.props(self, address, connectionSettings))
+
         {
-          case Athena.Connected(remote, local) =>
+          case Athena.Connected(remote, local) if sender() == connection =>
             log.debug("Cluster monitor connected to {}", remote)
             if(unconditional) {
               //if unconditional is true, that means that all hosts were previously exhausted
               //we should tell the cluster manager to immediately attempt a reconnect
               commander ! ClusterReconnected
             }
-            val connection = sender()
             connection ! Athena.Register(self)
             connection ! ConnectionActor.SubscribeToEvents
             context.become {
@@ -108,7 +107,7 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
                 context.become(tryConnect(connectionHosts.tail))
             }
 
-          case Athena.ConnectionFailed(remoteHost, error) =>
+          case Athena.ConnectionFailed(remoteHost, error) if sender() == connection =>
             if(error.isDefined) {
               log.warning("Cluster connector cannot connect to host {} due to error {}", connectionHosts.head.addr, error.get)
               log.warning("Trying next host.")
@@ -119,10 +118,12 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
 
           case ReceiveTimeout =>
             log.debug("Connection attempt to host {} timed out, trying next host.", connectionHosts.head.addr)
+            context.stop(connection)
             context.become(tryConnect(connectionHosts.tail))
 
           case cmd: Athena.CloseCommand =>
             sender() ! cmd.event
+            context.stop(connection)
             context.stop(self)
 
         }

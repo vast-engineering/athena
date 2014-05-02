@@ -31,10 +31,10 @@ private object CommandConverters {
         resultToQueryEvent(q, res)
 
       case (p: Requests.Prepare, res: CassandraResponses.PreparedResult) =>
-        if(res.metadata.columns.isEmpty || res.resultMetadata.columns.isEmpty) {
+        if(res.metadata.columns.isEmpty && res.resultMetadata.columns.isEmpty) {
           throw new IllegalStateException("Unexpected response to prepare request - no column metadata.")
         }
-        Prepared(p, PreparedStatementDef(res.id, p.query, p.keyspace, res.metadata.columns.get, res.resultMetadata.columns.get))
+        Prepared(p, PreparedStatementDef(res.id, p.query, p.keyspace, res.metadata.columns.getOrElse(IndexedSeq.empty), res.resultMetadata.columns.getOrElse(IndexedSeq.empty)))
 
       case (_, Ready) =>
         //shouldn't happen

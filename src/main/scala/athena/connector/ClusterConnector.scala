@@ -26,6 +26,7 @@ import athena.data.PreparedStatementDef
 import akka.util.ByteString
 import akka.actor.Status.Failure
 import athena.util.MD5Hash
+import java.util.concurrent.TimeUnit
 
 private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnectorSetup) extends Actor with ActorLogging {
 

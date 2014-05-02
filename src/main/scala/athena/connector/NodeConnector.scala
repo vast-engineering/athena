@@ -34,7 +34,7 @@ import scala.collection.mutable
 private[athena] class NodeConnector(commander: ActorRef,
                                     remoteAddress: InetSocketAddress,
                                     settings: NodeConnectorSettings,
-                                    preparedStatementDefs: Map[MD5Hash, PreparedStatementDef]) extends Actor with Stash with ActorLogging {
+                                    preparedStatementDefs: Map[MD5Hash, PreparedStatementDef]) extends Actor with ActorLogging {
 
   //
   // TODO - reap connections below the usage threshold
@@ -63,6 +63,12 @@ private[athena] class NodeConnector(commander: ActorRef,
     Timeout(10, TimeUnit.SECONDS)
   }
 
+
+  override def postStop() {
+    //fail any pending requests
+    pendingRequests.foreach(r => r.promise.trySuccess(Responses.ConnectionUnavailable(r.request)))
+  }
+
   private val defaultBehavior: Receive = {
     case req: AthenaRequest =>
       sender ! ConnectionUnavailable(req)
@@ -72,14 +78,19 @@ private[athena] class NodeConnector(commander: ActorRef,
       sender ! close.event
       context.stop(self)
 
-    case Terminated(`commander`) =>
-      log.error("Node connector commander unexpectedly shut down. Terminating.")
-      context.stop(self)
+    case c: Athena.ConnectionClosed =>
+      if(c.isErrorClosed) {
+        log.error("Connection closed with error - {}", c.getErrorCause)
+      } else {
+        log.debug("Connection closed - removing from pool.")
+      }
+      val connection = sender()
+      removeConnection(connection)
+      context.stop(connection)
 
     case Terminated(child) if liveConnections.contains(child) =>
-      log.warning("Connection unexpectedly terminated. Disconnecting node.")
+      log.warning("Connection terminated.")
       removeConnection(child)
-      disconnect()
 
     case StatementPrepared(statementDef) =>
       livePreparedStatements.update(statementDef.id, statementDef)
@@ -170,8 +181,8 @@ private[athena] class NodeConnector(commander: ActorRef,
     case KeyspaceSet(connection, newKeyspace) =>
       markKeyspaceSwitch(connection, newKeyspace)
 
-    case KeyspaceAttemptFailed(newKeyspace, error) =>
-      markKeyspaceError(newKeyspace, error)
+    case KeyspaceAttemptFailed(connection, error) =>
+      markKeyspaceError(connection, error)
 
     case Disconnect =>
       disconnect()
@@ -462,24 +473,24 @@ private[athena] class NodeConnector(commander: ActorRef,
 
           case KeyspaceChanged(unknown) =>
             log.error("Got a set keyspace response to an incorrect keyspace - {}", unknown)
-            KeyspaceAttemptFailed(keyspace, Athena.InternalError("Keyspace operation failed."))
+            KeyspaceAttemptFailed(connection, Athena.InternalError("Keyspace operation failed."))
 
           case ConnectionCommandFailed(_, Some(error)) =>
             log.error("Could not set keyspace {} due to error - {}", keyspace, error)
-            KeyspaceAttemptFailed(keyspace, error)
+            KeyspaceAttemptFailed(connection, error)
 
           case ConnectionCommandFailed(_, None) =>
             log.error("Could not set keyspace {}", keyspace)
-            KeyspaceAttemptFailed(keyspace, Athena.InternalError("Keyspace operation failed."))
+            KeyspaceAttemptFailed(connection, Athena.InternalError("Keyspace operation failed."))
 
           case keyspaceResponse =>
             log.error("Unexpected response to set keyspace call - {}", keyspaceResponse)
-            KeyspaceAttemptFailed(keyspace, Athena.InternalError("Keyspace operation failed."))
+            KeyspaceAttemptFailed(connection, Athena.InternalError("Keyspace operation failed."))
 
         } recover {
           case NonFatal(t) =>
             log.error("Could not set keyspace due to failure - {}", t)
-            KeyspaceAttemptFailed(keyspace, Athena.GeneralError("Keyspace operation failed."))
+            KeyspaceAttemptFailed(connection, Athena.GeneralError("Keyspace operation failed."))
         } pipeTo self
 
       case Active(_, currentCount) =>
@@ -549,14 +560,18 @@ private[athena] class NodeConnector(commander: ActorRef,
 
   }
 
-  private def markKeyspaceError(keyspace: String, error: Athena.Error) {
-    liveConnections.transform {
-      case (connection, SwitchingKeyspace(destinationKeyspace, previousKeyspace)) if keyspace == destinationKeyspace =>
-        Active(previousKeyspace, 0)
-      case (connection, status) => status
+  private def markKeyspaceError(connection: ActorRef, error: Athena.Error) {
+    val oldState = liveConnections.getOrElse(connection, throw new IllegalArgumentException("Cannot mark keyspace failure on unknown connection."))
+    val (newState, failedKeyspace) = oldState match {
+      case SwitchingKeyspace(target, previous) => (Active(previous, 0), target)
+      case x =>
+        log.error("Got unexpected state {} for connection switching keyspace.", x)
+        throw new IllegalArgumentException("Cannot update keyspace.")
+
     }
+    liveConnections.update(connection, newState)
     //bounce anybody waiting on that keyspace explicitly - re-dispatch anybody who is waiting for a generic connection
-    dequeuePending(Some(keyspace)).foreach { p =>
+    dequeuePending(Some(failedKeyspace)).foreach { p =>
       if(p.keyspace.isDefined) {
         p.promise.trySuccess(Responses.ErrorResponse(p.request, error))
       } else {
@@ -567,7 +582,33 @@ private[athena] class NodeConnector(commander: ActorRef,
 
   private def removeConnection(connection: ActorRef) {
     context.unwatch(connection)
-    liveConnections.remove(connection)
+    //remove the conenction and possibly bounce anybody waiting on it
+    val removed = liveConnections.remove(connection)
+
+    removed.foreach {
+        case SwitchingKeyspace(failedKeyspace, _) =>
+          //bounce anybody waiting on that keyspace explicitly - re-dispatch anybody who is waiting for a generic connection
+          dequeuePending(Some(failedKeyspace)).foreach { p =>
+            if(p.keyspace.isDefined) {
+              p.promise.trySuccess(Responses.ErrorResponse(p.request, ConnectionError(remoteAddress.getHostString, remoteAddress.getPort)))
+            } else {
+              dispatch(p)
+            }
+          }
+
+        case Connecting(keyspaceOpt) =>
+          //now bounce any pending requests for a connection to this keyspace
+          dequeuePending(keyspaceOpt).foreach { p =>
+            p.promise.trySuccess(Responses.ErrorResponse(p.request, ConnectionError(remoteAddress.getHostString, remoteAddress.getPort)))
+          }
+
+        case Active(_, _) =>
+          //no action - these are live on the connection and the reqeusts will bounce automatically
+    }
+
+//      case SwitchingKeyspace(destinationKeyspace, _) =>
+//        //if this is the only keyspace switch active for a given keyspace
+//    }
   }
 
   private def dequeuePending(connectionKeyspace: Option[String]): Iterable[PendingRequest] = {
@@ -610,12 +651,6 @@ private[athena] class NodeConnector(commander: ActorRef,
       case _ =>
         //log.debug("Response completed. Request - {}", request)
         self ! RequestCompleted(connection)
-    }
-
-    requestF.onSuccess {
-      case failure: FailureResponse =>
-        log.debug("Sending {} failed, notifying connection holder.", request)
-        self ! Disconnect
     }
 
     //TODO: Should we disconnect if the request fails with an exception?
@@ -673,7 +708,7 @@ private[athena] object NodeConnector {
 
   private sealed trait KeyspaceResponse
   private case class KeyspaceSet(connection: ActorRef, newKeyspace: String) extends KeyspaceResponse
-  private case class KeyspaceAttemptFailed(keyspace: String, error: Athena.Error) extends KeyspaceResponse
+  private case class KeyspaceAttemptFailed(connection: ActorRef, error: Athena.Error) extends KeyspaceResponse
 
   private sealed trait ConnectionResponse
   private case class ConnectionInitialized(connection: ActorRef, keyspace: Option[String]) extends ConnectionResponse

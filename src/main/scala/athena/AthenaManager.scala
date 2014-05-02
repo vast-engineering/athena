@@ -18,10 +18,6 @@ private[athena] class AthenaManager(globalSettings: AthenaExt#Settings) extends 
   private[this] val nodeConnectorCounter = Iterator from 0
   private[this] val clusterConnectorCounter = Iterator from 0
 
-
-  //our actors do not restart
-  override def supervisorStrategy: SupervisorStrategy = SupervisorStrategy.stoppingStrategy
-
   def receive = {
     case connect: Athena.Connect =>
       val commander = sender()

@@ -58,9 +58,6 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
 
   type MyInit = Init[HasConnectionInfo, RequestEnvelope, ResponseEnvelope]
 
-  //Any unhandled crash kills this actor - it models a network connection,
-  // so a restart would transparently re-open that connection. That decision should be
-  // up to the client of this actor.
   //This strategy will cause any failing child to stop, which should fire a Terminated event to us
   // which we'll either handle or die ourselves due to a death pact.
   override def supervisorStrategy = SupervisorStrategy.stoppingStrategy
@@ -146,9 +143,23 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
 
     type Behavior = PartialFunction[Any, State]
 
+    /**
+     * The default behavior for unhandled messages in any state.
+     */
+    var defaultBehavior: Behavior = PartialFunction.empty
+
     sealed trait State
     case class NewState(newBehavior: Behavior) extends State
     case object Stay extends State
+
+
+    def behavior2Receive(behavior: Behavior): Receive = {
+      case x if behavior.isDefinedAt(x) =>
+        behavior(x) match {
+          case Stay => //do nothing
+          case NewState(newBehavior) => context.become(behavior2Receive(newBehavior orElse defaultBehavior))
+        }
+    }
 
     /**
      * A utility function to map a partial function to a behavior
@@ -184,35 +195,6 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
           startWith(shutdown())
       }
     }
-
-    /**
-     * The default behavior for unhandled messages in any state.
-     */
-    def defaultBehavior: Behavior = {
-      case req: AthenaRequest =>
-        log.warning(s"Discarding request $req due to default behavior.")
-        sender ! Responses.RequestFailed(req)
-        stay()
-
-      case Terminated(`pipelineHandler`) ⇒
-        log.warning("Pipeline handler died while waiting for init - stopping")
-        connectCommander ! Athena.ConnectionFailed(remoteAddress)
-        shutdown(Set(), Athena.Closed, Tcp.Close)
-
-      case cmd: Athena.CloseCommand =>
-        log.warning("Closing connection with default behavior.")
-        shutdown(Set(sender()), cmd.event, tcpCommandForAthenaCommand(cmd))
-
-    }
-
-    def behavior2Receive(behavior: Behavior): Receive = {
-      case x if behavior.isDefinedAt(x) =>
-        behavior(x) match {
-          case Stay => //do nothing
-          case NewState(newBehavior) => context.become(behavior2Receive(newBehavior orElse defaultBehavior))
-        }
-    }
-
 
     def shutdown(commanders: Set[ActorRef] = Set(), response: Athena.ConnectionClosed = Athena.Closed, tcpCloseCommand: Tcp.CloseCommand = Tcp.Close): State = {
 
@@ -251,6 +233,31 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
 
 
     def initConnection(): State = {
+
+      defaultBehavior = behavior {
+        case req: AthenaRequest =>
+          log.warning(s"Discarding request $req due to default behavior.")
+          sender ! Responses.RequestFailed(req)
+          stay()
+
+        case closed: Tcp.ConnectionClosed =>
+          if(closed.isErrorClosed) {
+            log.warning("Connection unexpectedly closed with error {}", closed.getErrorCause)
+          } else {
+            log.warning("Connection unexpectedly closed.")
+          }
+          connectCommander ! Athena.ConnectionFailed(remoteAddress)
+          stop()
+
+        case Terminated(`pipelineHandler`) ⇒
+          log.warning("Pipeline handler died while waiting for init - stopping")
+          connectCommander ! Athena.ConnectionFailed(remoteAddress)
+          shutdown(Set(), Athena.Closed, Tcp.Close)
+
+        case cmd: Athena.CloseCommand =>
+          log.warning("Closing connection with default behavior.")
+          shutdown(Set(sender()), cmd.event, tcpCommandForAthenaCommand(cmd))
+      }
 
       //TODO - make the error more granular - we need a way to indicate that an
       //error is transient (i.e. can't reach the host) vs. permanently fatal (can't authenticate, bad keyspace, etc)
@@ -337,6 +344,29 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
 
       //schedule our initial tick
       scheduleTick()
+
+      defaultBehavior = behavior {
+        case closed: Tcp.ConnectionClosed =>
+          log.warning("Connection unexpectedly closed.")
+          failAll()
+          if(closed.isErrorClosed) {
+            commander ! Athena.ErrorClosed(closed.getErrorCause)
+          } else {
+            commander ! Athena.Closed
+          }
+          stop()
+
+        case Terminated(`pipelineHandler`) ⇒
+          log.warning("Pipeline handler died while waiting for init - stopping")
+          failAll()
+          commander ! Athena.ErrorClosed("Pipeline handler died.")
+          shutdown(Set(), Athena.Closed, Tcp.Close)
+
+        case cmd: Athena.CloseCommand =>
+          log.warning("Closing connection with default behavior.")
+          shutdown(Set(sender()), cmd.event, tcpCommandForAthenaCommand(cmd))
+
+      }
 
       def sendResponse(env: ResponseEnvelope) {
         if(env.streamId < 0) {
@@ -445,16 +475,17 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
           case Terminated(`pipelineHandler`) ⇒
             //we need to immediately shut down - this is fatal
             log.debug("Pipeline handler died.")
+            commander ! Athena.ErrorClosed("Pipeline handler died.")
             stop()
 
           case Athena.Abort =>
             log.debug("Aborting connection.")
-            abort(Set(sender()))
+            abort(Set(commander, sender()))
 
           case Athena.Close =>
             //kill any queued requests, but attempt to finish processing outstanding requests
             log.debug("Closing connection.")
-            cleanlyClose(Set(sender()))
+            cleanlyClose(Set(commander, sender()))
 
           case BackpressureBuffer.HighWatermarkReached ⇒
             //we need to temporarily stop writing requests to the connection
