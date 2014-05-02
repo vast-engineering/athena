@@ -87,10 +87,16 @@ private[athena] class NodeConnector(commander: ActorRef,
       val connection = sender()
       removeConnection(connection)
       context.stop(connection)
+      if(liveConnections.isEmpty) {
+        disconnect()
+      }
 
     case Terminated(child) if liveConnections.contains(child) =>
       log.warning("Connection terminated.")
       removeConnection(child)
+      if(liveConnections.isEmpty) {
+        disconnect()
+      }
 
     case StatementPrepared(statementDef) =>
       livePreparedStatements.update(statementDef.id, statementDef)
@@ -264,59 +270,51 @@ private[athena] class NodeConnector(commander: ActorRef,
 
   private def close(command: Athena.CloseCommand, commanders: Set[ActorRef]) {
 
-    context.setReceiveTimeout(Duration.Inf)
+    context.setReceiveTimeout(settings.poolSettings.connectionTimeout)
 
     log.debug("Closing node connector with active connections - {}", liveConnections.keys)
 
-    def closing(closeActors: Set[ActorRef], command: Athena.CloseCommand, commanders: Set[ActorRef]) {
+    def closeStep(closeActors: Set[ActorRef], command: Athena.CloseCommand, commanders: Set[ActorRef]) {
       log.debug("Moving to closing state with {} live connections.", closeActors.size)
-
-      context.setReceiveTimeout(settings.poolSettings.connectionTimeout)
 
       def signalClosed() {
         commanders.foreach(_ ! command.event)
         context.stop(self)
       }
 
-      val behavior = ({
-        case req: AthenaRequest =>
-          log.warning("Rejecting request because connector is shutting down.")
-          sender ! Responses.ConnectionUnavailable(req)
-
-        case cmd: Athena.CloseCommand =>
-          log.debug("Ignoring close command {} - already shutting down.", cmd)
-          closing(closeActors, command, commanders + sender)
-
-        case ConnectionInitialized(connection, _) =>
-          closing(closeActors + shutdownConnection(connection, command), command, commanders)
-
-        case ConnectionAttemptFailed =>
-        //ignore
-
-        case Terminated(child) if closeActors.contains(child) ⇒
-          val stillOpen = closeActors - child
-          if (stillOpen.isEmpty) {
-            signalClosed()
-          } else closing(stillOpen, command, commanders)
-
-        case ReceiveTimeout ⇒
-          log.warning("Initiating forced shutdown due to close timeout expiring.")
-          signalClosed()
-
-        case _: RequestCompleted  ⇒ // ignore
-      }: Receive) orElse defaultBehavior
-
       if(closeActors.isEmpty) {
         signalClosed()
       } else {
-        context.become(behavior)
+        context.become {
+          case req: AthenaRequest =>
+            log.warning("Rejecting request because connector is shutting down.")
+            sender ! Responses.ConnectionUnavailable(req)
+
+          case cmd: Athena.CloseCommand =>
+            log.debug("Ignoring close command {} - already shutting down.", cmd)
+            closeStep(closeActors, command, commanders + sender)
+
+          case Terminated(child) =>
+            val stillOpen = closeActors - child
+            if (stillOpen.isEmpty) {
+              signalClosed()
+            } else {
+              closeStep(stillOpen, command, commanders)
+            }
+
+          case ReceiveTimeout ⇒
+            log.warning("Initiating forced shutdown due to close timeout expiring.")
+            signalClosed()
+
+          case _: RequestCompleted  ⇒ // ignore
+        }
       }
     }
 
     log.debug("Killing all active connections.")
     val closeActors = shutdownAll(command).map(context.watch)
 
-    closing(closeActors.toSet, command, commanders)
+    closeStep(closeActors.toSet, command, commanders)
   }
 
   private def dispatch(pending: PendingRequest) {
@@ -509,9 +507,10 @@ private[athena] class NodeConnector(commander: ActorRef,
 
   }
 
+  private[this] val closerCounter = Iterator from 0
   private def shutdownConnection(connection: ActorRef, cmd: Athena.CloseCommand = Athena.Close): ActorRef = {
     removeConnection(connection)
-    context.actorOf(CloseActor.props(connection, cmd, settings.connectionSettings.socketSettings.connectTimeout))
+    context.actorOf(CloseActor.props(connection, cmd, settings.connectionSettings.socketSettings.connectTimeout), name = s"pool-closer-${closerCounter.next()}")
   }
 
   private def spawnNewConnection(keyspace: Option[String] = None) {
@@ -618,11 +617,11 @@ private[athena] class NodeConnector(commander: ActorRef,
   }
 
 
-  private def shutdownAll(command: Athena.CloseCommand = Athena.Close): Iterable[ActorRef] = {
+  private def shutdownAll(command: Athena.CloseCommand = Athena.Close): Set[ActorRef] = {
     //bounce all pending requests
     pendingRequests.foreach(x => x.promise.trySuccess(ConnectionUnavailable(x.request)))
     //close all existing connections
-    liveConnections.keySet.map(shutdownConnection(_, command))
+    liveConnections.keys.toSet[ActorRef].map(connection => shutdownConnection(connection, command))
   }
 
   //SHOULD ONLY BE CALLED FROM THIS ACTOR'S RECEIVE LOOP - THIS MODIFIES STATE.

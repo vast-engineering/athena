@@ -236,10 +236,10 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
       }
     }
 
-    //context.unwatch(clusterMonitor)
     val toClose = pools.values.toSet + clusterMonitor
-    val closeActors = toClose.map { pool =>
-      context.watch(closeActor(pool))
+    val closeActors = toClose.map { a =>
+      context.unwatch(a)
+      context.watch(closeActor(a))
     }
 
     liveHosts = IndexedSeq.empty
@@ -295,7 +295,7 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
     val pool = context.watch {
       context.actorOf(
         props = NodeConnector.props(self, new InetSocketAddress(host, setup.port), settings.localNodeSettings, preparedStatements),
-        name = "node-connector-" + actorNameIndex.next() + "-" + host.getHostAddress
+        name = "node-connector-" + actorNameIndex.next()
       )
     }
 

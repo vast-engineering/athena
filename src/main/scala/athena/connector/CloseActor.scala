@@ -10,6 +10,8 @@ import akka.actor.Terminated
  */
 private[connector] class CloseActor(connection: ActorRef, closeCmd: Athena.CloseCommand, timeout: Duration) extends Actor with ActorLogging {
 
+  log.debug("Closing {} with command {}", connection, closeCmd)
+
   context.watch(connection)
   context.setReceiveTimeout(timeout)
   connection ! closeCmd

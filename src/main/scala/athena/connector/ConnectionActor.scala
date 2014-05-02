@@ -132,6 +132,13 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
         log.warning("Connection to {} timed out.", remoteAddress)
         connectCommander ! Athena.ConnectionFailed(remoteAddress)
         context.stop(self)
+
+      case c: Athena.CloseCommand =>
+        log.debug("Closing during connection phase.")
+        connectCommander ! Athena.ConnectionFailed(remoteAddress)
+        sender() ! c.event
+        context.stop(self)
+
     }
 
   }

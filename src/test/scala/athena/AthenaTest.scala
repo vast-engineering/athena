@@ -10,6 +10,7 @@ import akka.io.IO
 import java.net.{InetSocketAddress, InetAddress}
 import athena.testutils.{ProcessManager, LineHandler, CassandraManager}
 import scala.util.control.NonFatal
+import java.util.concurrent.TimeUnit
 
 trait TestLogging { self: TestKitBase =>
   val log = Logging(system, self.getClass)
@@ -90,7 +91,8 @@ trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender wit
     try {
       f(connector)
     } finally {
-      akka.pattern.gracefulStop(connector, timeout.duration, Athena.Close)
+      connector ! Athena.Close
+      within(10 seconds) { expectMsgType[Athena.ConnectionClosed] }
     }
   }
 
@@ -105,7 +107,8 @@ trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender wit
     try {
       f(connector)
     } finally {
-      akka.pattern.gracefulStop(connector, timeout.duration, Athena.Close)
+      connector ! Athena.Close
+      within(10 seconds) { expectMsgType[Athena.ConnectionClosed] }
     }
   }
 
@@ -121,7 +124,8 @@ trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender wit
     try {
       f(connector)
     } finally {
-      akka.pattern.gracefulStop(connector, timeout.duration, Athena.Close)
+      connector ! Athena.Close
+      within(10 seconds) { expectMsgType[Athena.ConnectionClosed] }
     }
 
   }
