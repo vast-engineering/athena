@@ -96,7 +96,7 @@ object CValue {
           CDecimal(new JBigDecimal(new JBigInteger(unscaledBytes), scale))
         case DoubleType => CDouble(data.iterator.getDouble)
         case FloatType => CFloat(data.iterator.getFloat)
-        case TimestampType => CTimestamp(new DateTime(data.iterator.getLong))
+        case TimestampType => CTimestamp(data.iterator.getLong)
         case UUIDType =>
           val it = data.iterator
           CUUID(new UUID(it.getLong, it.getLong))
@@ -166,7 +166,7 @@ case class CDecimal(value: JBigDecimal) extends CScalarValue
 case class CDouble(value: Double) extends CScalarValue
 case class CFloat(value: Float) extends CScalarValue
 case class CInt(value: Int) extends CScalarValue
-case class CTimestamp(value: DateTime) extends CScalarValue
+case class CTimestamp(value: Long) extends CScalarValue
 case class CUUID(value: UUID) extends CScalarValue
 case class CVarChar(value: String) extends CScalarValue
 case class CVarInt(value: JBigInteger) extends CScalarValue

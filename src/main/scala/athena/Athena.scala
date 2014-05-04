@@ -24,6 +24,10 @@ object Athena extends ExtensionKey[AthenaExt] {
     def toThrowable: Throwable = new AthenaException(message)
   }
 
+  case class InternalError(message: String) extends Error {
+    override def toThrowable: Throwable = new InternalException(message)
+  }
+
   case class ConnectionError(host: String, port: Int) extends Error {
     def message: String = s"Connection to $host:$port failed."
     def toThrowable: Throwable = new AthenaException(message)
@@ -46,25 +50,22 @@ object Athena extends ExtensionKey[AthenaExt] {
    * A command to initiate a single connection to a single Cassandra node.
    */
   case class Connect(remoteAddress: InetSocketAddress,
-                     keyspace: Option[String],
-                     settings: Option[ConnectionSettings],
-                     eventHandler: Option[ActorRef]) extends ConnectionCreationCommand
-  object Connect {
-    def apply(host: String, port: Int, keyspace: Option[String], settings: Option[ConnectionSettings] = None): Connect = {
-      val address = new InetSocketAddress(host, port)
-      Connect(address, keyspace, settings, None)
-    }
-  }
+                     settings: Option[ConnectionSettings] = None,
+                     initialKeyspace: Option[String] = None) extends ConnectionCreationCommand
+
+  /**
+   * Must be sent to a connection actor after the receipt of a Conneced event. All further communication will be with teh
+   * designated handler actor.
+   */
+  case class Register(handler: ActorRef) extends Command
 
   /**
    * A command to initiate a managed connection pool to a single Cassandra node.
    *
    * @param remoteAddress The host and port to connect to.
-   * @param keyspace The optional keyspace to use for connections in the pool.
    * @param settings Settings for the pool - if this is not defined, default settings read from the ActorSystem's config will be used.
    */
   case class NodeConnectorSetup(remoteAddress: InetSocketAddress,
-                                keyspace: Option[String],
                                 settings: Option[NodeConnectorSettings] = None) extends ConnectionCreationCommand {
     private[athena] def normalized(implicit refFactory: ActorRefFactory) =
       if (settings.isDefined) {
@@ -76,10 +77,9 @@ object Athena extends ExtensionKey[AthenaExt] {
 
   object NodeConnectorSetup {
     def apply(host: String, port: Int,
-              keyspace: Option[String],
               settings: Option[NodeConnectorSettings])
               (implicit refFactory: ActorRefFactory): NodeConnectorSetup =
-      NodeConnectorSetup(new InetSocketAddress(host, port), keyspace, settings).normalized
+      NodeConnectorSetup(new InetSocketAddress(host, port), settings).normalized
   }
 
   /**
@@ -87,12 +87,11 @@ object Athena extends ExtensionKey[AthenaExt] {
    *
    * @param initialHosts A list of host addressed used to seed the cluster.
    * @param port the port used to connect
-   * @param keyspace The optional keyspace to use for connections in the cluster.
    * @param settings Settings for the cluster - if this is not defined, default settings read from the ActorSystem's config will be used.
    * @param failOnInit If true, the cluster conntection will fail at initialization time if no hosts are reachable. If false,
    *                   it will continue to attempt reconnects.
    */
-  case class ClusterConnectorSetup(initialHosts: Set[InetAddress], port: Int, keyspace: Option[String],
+  case class ClusterConnectorSetup(initialHosts: Set[InetAddress], port: Int,
                                    settings: Option[ClusterConnectorSettings] = None, failOnInit: Boolean = false) extends ConnectionCreationCommand {
     private[athena] def normalized(implicit refFactory: ActorRefFactory) =
       if (settings.isDefined) this
@@ -212,12 +211,6 @@ object Athena extends ExtensionKey[AthenaExt] {
     override def isAborted = true
   }
   /**
-   * The peer has closed its writing half of the connection.
-   */
-  case object ServerClosed extends ConnectionClosed {
-    override def isServerClosed = true
-  }
-  /**
    * The connection has been closed due to an IO error.
    */
   case class ErrorClosed(cause: String) extends ConnectionClosed {
@@ -227,11 +220,8 @@ object Athena extends ExtensionKey[AthenaExt] {
 
   case object ClosedAll extends Event
 
-  /**
-   * Whenever a command cannot be completed, the queried actor will reply with
-   * this message, wrapping the original command which failed.
-   */
-  case class CommandFailed(cmd: Command, error: Option[Error] = None) extends Event
+  case class ConnectionFailed(remoteAddress: InetSocketAddress, error: Option[Athena.Error] = None) extends Event
+
 
   /**
    * Events emitted by a node connector.

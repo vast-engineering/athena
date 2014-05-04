@@ -6,6 +6,7 @@ import athena.data.Metadata
 import akka.util.ByteString
 import athena.connector.CassandraResponses.CassandraResponse
 import java.net.InetSocketAddress
+import athena.util.MD5Hash
 
 /**
  * A base trait for all Cassandra responses. These map 1:1 to the responses defined here -
@@ -20,11 +21,13 @@ private[connector] object CassandraResponses {
 
   case object Ready extends CassandraResponse
 
-  sealed abstract class Result extends CassandraResponse
+  sealed trait Result extends CassandraResponse
 
   case object SuccessfulResult extends Result
   case class RowsResult(metadata: Metadata, data: Seq[IndexedSeq[ByteString]]) extends Result
   case class KeyspaceResult(keyspace: String) extends Result
+  case class PreparedResult(id: MD5Hash, metadata: Metadata, resultMetadata: Metadata) extends Result
+  case class SchemaChange(change: String, keyspace: String, table: String) extends Result
 
   sealed trait ClusterEvent extends CassandraResponse
 

@@ -2,15 +2,13 @@ package athena.data
 
 import akka.util.{ByteIterator, ByteString}
 import java.nio.ByteOrder
-import scala.annotation.tailrec
-import com.typesafe.scalalogging.slf4j.Logging
 import athena.util.ByteStringUtils
 
 /**
  * Misc utils used to help encode parameter values.
  *
  */
-private[data] object ParamCodecUtils extends Logging {
+private[data] object ParamCodecUtils  {
 
   import ByteStringUtils.newBuilder
 

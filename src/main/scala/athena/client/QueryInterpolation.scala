@@ -23,9 +23,6 @@ object QueryInterpolation {
 
   implicit class QueryContext(val s: StringContext) extends AnyVal {
 
-    def i(args: Any*) = {
-
-    }
     def cql(paramGenerators: ParamGenerator[_]*) = {
       val params = paramGenerators.map(_.toParam)
       val query = s.parts.mkString("?")
@@ -46,7 +43,8 @@ object QueryInterpolation {
     }
 
     def asQueryNoArgs[B](implicit rr: RowReader[B]): StatementRunner[Enumerator[CvResult[B]]] = {
-      StatementRunner.streamRunner(q, Seq())(rr)
+      //don't use a prepared statement because there are no query parameters - doesn't make a lot of sense
+      StatementRunner.streamRunner(q, Seq(), usePreparedStatement = false)(rr)
     }
 
     def asUpdate[A](implicit rw: RowWriter[A]): A => StatementRunner[Future[Unit]] = {

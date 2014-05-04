@@ -1,10 +1,9 @@
 package athena
 
 import akka.util.ByteString
-import athena.Requests.{AthenaRequest, Statement}
-import athena.data.ColumnDef
+import athena.Requests.{Prepare, AthenaRequest, Statement}
+import athena.data.{PreparedStatementDef, ColumnDef}
 import scala.Predef._
-import athena.data.ColumnDef
 import java.net.InetAddress
 
 
@@ -25,6 +24,12 @@ object Responses {
   case class RequestFailed(request: AthenaRequest) extends FailureResponse
 
   /**
+   * Sent when a request is submitted to an actor in an invalid state. For example, a query with an explicit
+   * keyspace set cannot be sent to a connection that is currently set to a different keyspace.
+   */
+  case class InvalidRequest(request: AthenaRequest) extends FailureResponse
+
+  /**
    * Signals that a request timed out.
    */
   case class Timedout(request: AthenaRequest) extends FailureResponse
@@ -37,7 +42,7 @@ object Responses {
   /**
    * Signals that a request could not be sent due to a connection problem
    */
-  case class ConnectionUnavailable(request: AthenaRequest, errors: Map[InetAddress, Any] = Map.empty) extends FailureResponse
+  case class ConnectionUnavailable(request: AthenaRequest) extends FailureResponse
 
   sealed abstract class SuccessfulResponse extends AthenaResponse {
     def isFailure: Boolean = false
@@ -60,7 +65,11 @@ object Responses {
   case class Successful(request: AthenaRequest) extends QueryResult
 
   //this will be the response (if successful) from a Statement command
-  case class Rows(request: Statement, columnDefs: IndexedSeq[ColumnDef], data: Seq[IndexedSeq[ByteString]], pagingState: Option[ByteString]) extends QueryResult
+  case class Rows(request: Statement, columnDefs: IndexedSeq[ColumnDef],
+                  data: Seq[IndexedSeq[ByteString]], pagingState: Option[ByteString]) extends QueryResult
+
+  case class Prepared(request: Prepare, statementDef: PreparedStatementDef) extends SuccessfulResponse
+
 
 }
 

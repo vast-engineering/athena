@@ -1,4 +1,4 @@
-package com.vast.farsandra;
+package athena.testutils;
 
 public interface LineHandler {
     void handleLine(String line);

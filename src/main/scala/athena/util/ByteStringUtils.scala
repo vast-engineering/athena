@@ -140,6 +140,9 @@ private[athena] object ByteStringUtils {
     bb.sizeHint(2 + v.length)
     bb.putShort(v.length).putBytes(v).result()
   }
+  def shortBytes(v: ByteString)(implicit byteOrder: ByteOrder): ByteString = {
+    newBuilder(2 + v.length).putShort(v.length).append(v).result()
+  }
   def readShortBytes(it: ByteIterator)(implicit byteOrder: ByteOrder): ByteString = {
     val length = it.getShort
     val bs = it.clone().take(length).toByteString

@@ -1,4 +1,4 @@
-package com.vast.farsandra;
+package athena.testutils;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -24,9 +24,9 @@ import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class Farsandra {
+public class CassandraManager {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(Farsandra.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(CassandraManager.class);
 
     private String version;
     private String host;
@@ -49,17 +49,17 @@ public class Farsandra {
     private final List<LineHandler> outHandlers = new ArrayList<>();
     private final List<LineHandler> errorHandlers = new ArrayList<>();
 
-    public Farsandra withCleanInstanceOnStart(boolean start) {
+    public CassandraManager withCleanInstanceOnStart(boolean start) {
         this.cleanInstanceOnStart = start;
         return this;
     }
 
-    public Farsandra withSeeds(List<String> seeds) {
+    public CassandraManager withSeeds(List<String> seeds) {
         this.seeds.addAll(seeds);
         return this;
     }
 
-    public Farsandra withAppendedEnvrionment(String line) {
+    public CassandraManager withAppendedEnvrionment(String line) {
         envLinesToAppend.add(line);
         return this;
     }
@@ -70,7 +70,7 @@ public class Farsandra {
      * @param line a line to add
      * @return the list of lines
      */
-    public Farsandra withAppendedConfig(String line) {
+    public CassandraManager withAppendedConfig(String line) {
         yamlLinesToAppend.add(line);
         return this;
     }
@@ -81,17 +81,17 @@ public class Farsandra {
      * @param version
      * @return
      */
-    public Farsandra withVersion(String version) {
+    public CassandraManager withVersion(String version) {
         this.version = version;
         return this;
     }
 
-    public Farsandra withYamlReplacement(String match, String replace) {
+    public CassandraManager withYamlReplacement(String match, String replace) {
         this.yamlReplacements.put(match, replace);
         return this;
     }
 
-    public Farsandra withEnvReplacement(String match, String replace) {
+    public CassandraManager withEnvReplacement(String match, String replace) {
         this.envReplacements.put(match, replace);
         return this;
     }
@@ -102,7 +102,7 @@ public class Farsandra {
      * @param port
      * @return
      */
-    public Farsandra withPort(int port) {
+    public CassandraManager withPort(int port) {
         this.rpcPort = port;
         return this;
     }
@@ -113,47 +113,47 @@ public class Farsandra {
      * @param host
      * @return
      */
-    public Farsandra withHost(String host) {
+    public CassandraManager withHost(String host) {
         this.host = host;
         return this;
     }
 
-    public Farsandra withInstanceName(String name) {
+    public CassandraManager withInstanceName(String name) {
         this.instanceName = name;
         return this;
     }
 
-    public Farsandra withCreateConfigurationFiles(boolean write) {
+    public CassandraManager withCreateConfigurationFiles(boolean write) {
         this.createConfigurationFiles = write;
         return this;
     }
 
-    public Farsandra withJavaHome(String javaHome) {
+    public CassandraManager withJavaHome(String javaHome) {
         this.javaHome = javaHome;
         return this;
     }
 
-    public Farsandra withJmxPort(int jmxPort) {
+    public CassandraManager withJmxPort(int jmxPort) {
         this.jmxPort = jmxPort;
         return this;
     }
 
-    public Farsandra withMaxHeapSize(String newMaxHeap) {
+    public CassandraManager withMaxHeapSize(String newMaxHeap) {
         this.maxHeapSize = newMaxHeap;
         return this;
     }
 
-    public Farsandra withHeapNewSize(String newSize) {
+    public CassandraManager withHeapNewSize(String newSize) {
         this.heapNewSize = newSize;
         return this;
     }
 
-    public Farsandra withOutputHandler(LineHandler lineHandler) {
+    public CassandraManager withOutputHandler(LineHandler lineHandler) {
         this.outHandlers.add(lineHandler);
         return this;
     }
 
-    public Farsandra withErrorHandler(LineHandler lineHandler) {
+    public CassandraManager withErrorHandler(LineHandler lineHandler) {
         this.errorHandlers.add(lineHandler);
         return this;
     }
@@ -206,7 +206,7 @@ public class Farsandra {
         try {
             File cRoot = resolveCassandraHome(version);
 
-            File resourcePath = new File(Farsandra.class.getResource(cqlResource).toURI());
+            File resourcePath = new File(CassandraManager.class.getResource(cqlResource).toURI());
 
             File cstart = new File(new File(cRoot, "bin"), "cqlsh");
             String command = " /bin/bash " + cstart.getAbsolutePath() + " -f " + resourcePath.getAbsolutePath();

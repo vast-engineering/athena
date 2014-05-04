@@ -1,4 +1,4 @@
-package com.vast.farsandra;
+package athena.testutils;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -9,12 +9,11 @@ import java.util.List;
 
 public class StreamReader implements Runnable {
 
-    private InputStream is;
-    private List<LineHandler> handlers;
+    private final InputStream is;
+    private final List<LineHandler> handlers = new ArrayList<>();
 
     public StreamReader(InputStream is){
         this.is = is;
-        handlers = new ArrayList<>();
     }
 
     public void addHandler(LineHandler handler){

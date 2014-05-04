@@ -20,18 +20,19 @@ private[athena] class AthenaManager(globalSettings: AthenaExt#Settings) extends 
 
   def receive = {
     case connect: Athena.Connect =>
-      val commander = sender
+      val commander = sender()
       val settings = connect.settings.getOrElse(ConnectionSettings(context.system))
       context.actorOf(
-        props = Props[ConnectionActor](new ConnectionActor(commander, connect, settings)),
-        name = connectionCounter.next().toString)
+        props = Props[ConnectionActor](new ConnectionActor(commander, connect.remoteAddress, settings, connect.initialKeyspace)),
+        name = "connection-" + connectionCounter.next().toString)
 
     case setup: NodeConnectorSetup ⇒
       val normal = setup.normalized
+      val commander = sender()
       val connector = context.actorOf(
-        props = NodeConnector.props(sender, normal.remoteAddress, normal.keyspace, normal.settings.get),
+        props = NodeConnector.props(commander, normal),
         name = "node-connector-" + nodeConnectorCounter.next())
-      sender.tell(Athena.NodeConnectorInfo(connector, setup), connector)
+      commander.tell(Athena.NodeConnectorInfo(connector, setup), connector)
 
     case setup: ClusterConnectorSetup =>
       val connectCommander = sender()

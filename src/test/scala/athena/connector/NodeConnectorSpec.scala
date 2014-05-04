@@ -43,8 +43,8 @@ class NodeConnectorSpec extends WordSpec with AthenaTest with Matchers {
     }
 
     "use an explicit keyspace" in {
-      withNodeConnection(Some("testks")) { connector =>
-        val request = SimpleStatement("select * from users")
+      withNodeConnection() { connector =>
+        val request = SimpleStatement("select * from users", keyspace = Some("testks"))
         connector ! request
         val rows = expectMsgType[Rows]
         val columnDefs = rows.columnDefs

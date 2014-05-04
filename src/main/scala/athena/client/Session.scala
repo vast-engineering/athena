@@ -6,25 +6,25 @@ import akka.pattern._
 import akka.util.Timeout
 import akka.actor.Status.Failure
 
-import athena.{SerialConsistency, Consistency, Athena}
+import athena.{Responses, Athena}
 
 import play.api.libs.iteratee.Enumerator
 
-import athena.data.CValue
+import athena.data.{PreparedStatementDef, CVarChar, CValue}
 import athena.Consistency.Consistency
 import athena.SerialConsistency.SerialConsistency
 import athena.Athena.AthenaException
-import athena.Requests.SimpleStatement
+import athena.Requests.{BoundStatement, Prepare, SimpleStatement}
 
 import java.util.concurrent.TimeUnit
 import java.net.InetAddress
 import scala.concurrent.duration.{FiniteDuration, Duration}
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.{Promise, ExecutionContext, Future}
 import spray.util.LoggingContext
 import athena.client.pipelining.Pipeline
-import athena.connector.ClusterConnector
-import org.slf4j.LoggerFactory
-import athena.util.Rate
+import athena.util.{LoggingSource, Rate}
+import athena.Responses.Rows
+import scala.util.control.NonFatal
 
 trait Session {
 
@@ -34,20 +34,31 @@ trait Session {
    */
   def executeStream(query: String,
                     values: Seq[CValue] = Seq(),
-                    consistency: Consistency = Consistency.ONE,
-                    serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Enumerator[Row]
+                    consistency: Option[Consistency] = None,
+                    serialConsistency: Option[SerialConsistency] = None): Enumerator[Row]
+
+  def streamPrepared(statement: PreparedStatementDef,
+                    values: Seq[CValue] = Seq(),
+                    consistency: Option[Consistency] = None,
+                    serialConsistency: Option[SerialConsistency] = None): Enumerator[Row]
 
   /**
-   * Execute a query intended to update data. As opposed to the method above, this method 
+   * Execute a query. As opposed to the method above, this method
    * executes the query immediately. This also aggregates any and all result rows into memory. This 
    * avoids the need to stream rows, but be aware that if the query returns a large row count, they will
    * all be buffered in memory.
    */
   def execute(query: String,
               values: Seq[CValue] = Seq(),
-              consistency: Consistency = Consistency.ONE,
-              serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Future[Seq[Row]]
+              consistency: Option[Consistency] = None,
+              serialConsistency: Option[SerialConsistency] = None): Future[Seq[Row]]
 
+  def executePrepared(statement: PreparedStatementDef,
+              values: Seq[CValue] = Seq(),
+              consistency: Option[Consistency] = None,
+              serialConsistency: Option[SerialConsistency] = None): Future[Seq[Row]]
+
+  def prepare(query: String): Future[PreparedStatementDef]
 
   /**
    * This method must be called to properly dispose of the Session.
@@ -63,9 +74,9 @@ object Session {
   /**
    * Create a session using an already existing (and assumed valid) Connection ActorRef.
    */
-  def apply(connection: ActorRef)
-           (implicit log: LoggingContext, ec: ExecutionContext): Session = {
-    new SimpleSession(pipelining.pipeline(connection)) {
+  def apply(connection: ActorRef, keyspace: String)
+           (implicit logSource: LoggingSource, log: LoggingContext, ec: ExecutionContext): Session = {
+    new SimpleSession(pipelining.pipeline(validateKeyspace(connection, keyspace)), keyspace) {
       /**
        * This method must be called to properly dispose of the Session.
        */
@@ -78,27 +89,47 @@ object Session {
   /**
    * Create a session using an existing ActorSystem
    */
-  def apply(initialHosts: Set[InetAddress], port: Int, keyspace: Option[String] = None,
-            waitForConnection: Boolean = true)(implicit system: ActorRefFactory): Session = {
+  def apply(initialHosts: Set[InetAddress], port: Int, keyspace: String,
+            waitForConnection: Boolean = true)(implicit system: ActorRefFactory, log: LoggingContext): Session = {
     import system.dispatcher
     val connection = getConnection(initialHosts, port, keyspace, system, waitForConnection)
     val pipe = pipelining.pipeline(connection)
-    new SimpleSession(pipe) {
+    new SimpleSession(pipe, keyspace) {
       def close(): Unit = {
         //shutdown our actor
-        connection.foreach(system.stop)
+        connection.flatMap { c =>
+          akka.pattern.gracefulStop(c, defaultTimeoutDuration, Athena.Close) recover {
+            case NonFatal(e) =>
+              //hard kill the actor
+              log.warning("Athena session did not terminate in time. Killing actor.")
+              system.stop(c)
+          }
+        } andThen {
+          case _ => log.info("Athena session terminated.")
+        }
       }
     }
   }
 
+  private def validateKeyspace(connection: ActorRef, keyspace: String)(implicit ec: ExecutionContext, log: LoggingContext): Future[ActorRef] = {
+    import akka.pattern._
+
+    connection.ask(SimpleStatement("SELECT * FROM schema_keyspaces where keyspace_name = ?", Seq(CVarChar(keyspace)), Some("system"))).map {
+      case Rows(_, _, data, _) if data.size == 1 => connection
+      case _ =>
+        log.error("Could not validate keyspace {}", keyspace)
+        throw new AthenaException(s"Invalid keyspace $keyspace")
+    }
+  }
+
   private def getConnection(hosts: Set[InetAddress], port: Int,
-                            keyspace: Option[String] = None, actorRefFactory: ActorRefFactory,
+                            keyspace: String, actorRefFactory: ActorRefFactory,
                             waitForConnect: Boolean = true): Future[ActorRef] = {
-    //import actorRefFactory.dispatcher
+    import actorRefFactory.dispatcher
     val connectTimeout = if (waitForConnect) defaultTimeoutDuration else Duration.Inf
-    val setup = Athena.ClusterConnectorSetup(hosts, port, keyspace, None)
+    val setup = Athena.ClusterConnectorSetup(hosts, port, None)
     val initializer = actorRefFactory.actorOf(Props(new ConnectorInitializer(connectTimeout)))
-    initializer.ask(setup).mapTo[ActorRef]
+    initializer.ask(setup).mapTo[ActorRef].flatMap(c => validateKeyspace(c, keyspace))
   }
 
   private class ConnectorInitializer(connectTimeout: Duration) extends Actor with ActorLogging {
@@ -106,15 +137,10 @@ object Session {
     def receive: Receive = {
       case x: Athena.ClusterConnectorSetup =>
         IO(Athena)(context.system) ! x
-        val connectCommander = sender
+        val connectCommander = sender()
         context.become {
-          case Athena.CommandFailed(_, error) =>
-            connectCommander ! Failure(new AthenaException("Could not create connector.", error.map(_.toThrowable)))
-            context.stop(self)
-
-          case evt: Athena.ConnectionCreatedEvent =>
+          case Athena.ClusterConnectorInfo(connector, _) =>
             log.debug("Got cluster connection actor")
-            val connector = sender
             context.setReceiveTimeout(connectTimeout)
             context.become {
               case Athena.ClusterConnected =>
@@ -133,43 +159,98 @@ object Session {
                 context.stop(self)
             }
 
+          case unexpectedResponse =>
+            log.error("Got unexpected response to cluster creation - {}", unexpectedResponse)
+            connectCommander ! Failure(new AthenaException("Could not create connector."))
+            context.stop(self)
+
         }
     }
   }
 
-  abstract class SimpleSession(pipeline: Pipeline)
-                                      (implicit log: LoggingContext, ec: ExecutionContext) extends Session {
+  abstract class SimpleSession(pipeline: Pipeline, keyspace: String)
+                                      (implicit logSource: LoggingSource, log: LoggingContext, ec: ExecutionContext) extends Session {
 
-    import SimpleSession._
-
+    private[this] val queryLog = logSource("query.SimpleSession")
     private[this] val queryPipe = pipelining.queryPipeline(pipeline)
     private[this] val streamPipe = pipelining.streamingPipeline(pipeline)
 
     def executeStream(query: String,
                      values: Seq[CValue] = Seq(),
-                     consistency: Consistency = Consistency.ONE,
-                     serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Enumerator[Row] = {
-      // TODO: query and rate logging before and after streaming
-      streamPipe(SimpleStatement(query, values, Some(consistency), Some(serialConsistency)))
+                     consistency: Option[Consistency] = None,
+                     serialConsistency: Option[SerialConsistency] = None): Enumerator[Row] = {
+      queryLog.info("Streaming query {} with params {}", query, values)
+      val rate = new Rate
+      streamPipe(SimpleStatement(query, values, Some(keyspace), consistency, serialConsistency)).onDoneEnumerating {
+        queryLog.info(" Finished streaming query {} with params {} {}", query, values, rate)
+      }
+    }
+
+    def streamPrepared(statement: PreparedStatementDef,
+                      values: Seq[CValue] = Seq(),
+                      consistency: Option[Consistency] = None,
+                      serialConsistency: Option[SerialConsistency] = None): Enumerator[Row] = {
+      val bound = BoundStatement(statement, values, None, consistency, serialConsistency)
+      queryLog.info("Streaming prepared query {} with params {}", statement.rawQuery, values)
+      val rate = new Rate
+      streamPipe(bound).onDoneEnumerating {
+        queryLog.info(" Finished streaming prepared query {} with params {} {}", statement.rawQuery, values, rate)
+      }
     }
 
     def execute(query: String,
                 values: Seq[CValue] = Seq(),
-                consistency: Consistency = Consistency.ONE,
-                serialConsistency: SerialConsistency = SerialConsistency.SERIAL): Future[Seq[Row]] = {
-      queryLog.info("Executing query {} with params {}", query, values, "ignoredParam")
+                consistency: Option[Consistency] = None,
+                serialConsistency: Option[SerialConsistency] = None): Future[Seq[Row]] = {
+      queryLog.info("Executing query {} with params {}", query, values)
       val rate = new Rate
-      val resultF = queryPipe(SimpleStatement(query, values, Some(consistency), Some(serialConsistency)))
-      resultF.map { result =>
-        queryLog.info(" Executed query {} with params {} {}", query, values, rate)
-        result
+      queryPipe(SimpleStatement(query, values, Some(keyspace), consistency, serialConsistency)).andThen {
+        case _ => queryLog.info(" Executed query {} with params {} {}", query, values, rate)
       }
     }
 
-  }
+    def executePrepared(statement: PreparedStatementDef,
+                values: Seq[CValue] = Seq(),
+                consistency: Option[Consistency] = None,
+                serialConsistency: Option[SerialConsistency] = None): Future[Seq[Row]] = {
+      val bound = BoundStatement(statement, values, None, consistency, serialConsistency)
+      queryLog.info("Streaming prepared query {} with params {}", statement.rawQuery, values)
+      val rate = new Rate
+      queryPipe(bound).andThen {
+        case _ => queryLog.info(" Finished streaming prepared query {} with params {} {}", statement.rawQuery, values, rate)
+      }
+    }
 
-  object SimpleSession {
-    private val queryLog = LoggerFactory.getLogger("query." + classOf[Session].getName)
+    def prepare(query: String): Future[PreparedStatementDef] = {
+      getStatement(query) {
+        log.debug("Session preparing statement.")
+        pipeline(Prepare(query, Some(keyspace))).map {
+          case Responses.Prepared(_, statementDef) => statementDef
+
+          case unknown =>
+            throw new AthenaException(s"Unknown response to prepare request - $unknown")
+        }
+      }
+    }
+
+    import collection.JavaConversions._
+    private[this] val statementCache: collection.concurrent.Map[String, Future[PreparedStatementDef]] =
+      new java.util.concurrent.ConcurrentHashMap[String, Future[PreparedStatementDef]]()
+
+    private def getStatement(key: String)(genValue: => Future[PreparedStatementDef]): Future[PreparedStatementDef] = {
+      val promise = Promise[PreparedStatementDef]()
+      statementCache.putIfAbsent(key, promise.future) match {
+        case None =>
+          val future = genValue
+          future.onComplete { value =>
+            promise.complete(value)
+            // in case of exceptions we remove the cache entry (i.e. try again later)
+            if (value.isFailure) statementCache.remove(key, promise)
+          }
+          future
+        case Some(existingFuture) => existingFuture
+      }
+    }
   }
 
 }
