@@ -117,20 +117,23 @@ private[athena] class NodeConnector(commander: ActorRef,
   //the rest of the connections
   private def connecting(retryCount: Int = -1): Receive = {
 
+    if(retryCount > -1) {
+      log.warning("Attempting reconnection to {}", remoteAddress.getHostString)
+    }
     spawnNewConnection()
 
-    val behavior: Receive = {
+    val behavior: Receive = LoggingReceive {
       case ConnectionInitialized(connection, keyspace) =>
         markConnected(connection, keyspace)
         if(retryCount > -1) {
-          log.info("Reconnected to host {}", remoteAddress.getAddress)
+          log.info("Reconnected to host {}", remoteAddress.getHostString)
         } else {
-          log.info("Connected to host {}", remoteAddress.getAddress)
+          log.debug("Connected to host {}", remoteAddress.getHostString)
         }
         preparingStatements()
 
       case ConnectionAttemptFailed(_, error) =>
-        log.warning("Connection to {} failed due to error {}. Reconnecting.", remoteAddress, error)
+        log.warning("Connection to {} failed due to error {}. Reconnecting.", remoteAddress.getHostString, error)
         reconnecting(retryCount + 1)
 
       case cmd: Athena.CloseCommand =>
@@ -145,9 +148,9 @@ private[athena] class NodeConnector(commander: ActorRef,
     context.setReceiveTimeout(Duration.Inf)
 
     val delay = reconnectDelay(retryCount)
-    log.warning("Host {} is unreachable. Scheduling reconnection attempt in {}", remoteAddress.getAddress, delay)
+    log.warning("Host {} is unreachable. Scheduling reconnection attempt in {}", remoteAddress.getHostString, delay)
     val reconnectJob = context.system.scheduler.scheduleOnce(delay) {
-      log.debug("Attempting reconnection to {}", remoteAddress.getAddress)
+      log.debug("Attempting reconnection to {}", remoteAddress.getHostString)
       self ! InternalReconnect
     }
     
@@ -164,7 +167,7 @@ private[athena] class NodeConnector(commander: ActorRef,
   }
 
   private def disconnect() = {
-    log.debug("Disconnecting pool from host {}", remoteAddress.getAddress)
+    log.debug("Disconnecting pool from host {}", remoteAddress.getHostString)
     context.setReceiveTimeout(Duration.Inf)
 
     shutdownAll(Athena.Close)
@@ -178,11 +181,11 @@ private[athena] class NodeConnector(commander: ActorRef,
 
   private[this] val connectedDefault: Receive = ({
     case ConnectionInitialized(connection, keyspace) =>
-      log.debug("Host {} adding connection {} to pool", remoteAddress.getAddress, connection)
+      log.debug("Host {} adding connection {} to pool", remoteAddress.getHostString, connection)
       markConnected(connection, keyspace)
 
     case ConnectionAttemptFailed(keyspace, errorOpt) =>
-      log.warning("Connection to {} failed. Disconnecting from host.", remoteAddress)
+      log.warning("Connection to {} failed. Disconnecting from host.", remoteAddress.getHostString)
       disconnect()
 
     case KeyspaceSet(connection, newKeyspace) =>

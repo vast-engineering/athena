@@ -5,7 +5,7 @@ import akka.actor._
 import akka.pattern._
 import athena.Requests.AthenaRequest
 import athena.Responses._
-import scala.concurrent.duration.Duration
+import scala.concurrent.duration.{FiniteDuration, Duration}
 import athena.Athena._
 import java.net.{InetSocketAddress, InetAddress}
 import athena.connector.ClusterMonitorActor.{ClusterUnreachable, ClusterReconnected}
@@ -23,10 +23,8 @@ import athena.Responses.Timedout
 import athena.connector.ClusterInfo.ClusterMetadata
 import spray.util.LoggingContext
 import athena.data.PreparedStatementDef
-import akka.util.ByteString
 import akka.actor.Status.Failure
 import athena.util.MD5Hash
-import java.util.concurrent.TimeUnit
 
 private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnectorSetup) extends Actor with ActorLogging {
 
@@ -44,7 +42,7 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
     )
   }
 
-  private[this] val defaultRequestTimeout = settings.localNodeSettings.connectionSettings.requestTimeout.plus(Duration(5, TimeUnit.SECONDS))
+  private[this] val defaultRequestTimeout = settings.localNodeSettings.connectionSettings.requestTimeout
 
   private[this] val routingPlan = new RoutingPlan()
 
@@ -360,17 +358,28 @@ private[athena] object ClusterConnector {
 
   private class RequestActor(originalRequest: AthenaRequest, respondTo: ActorRef, plan: Iterator[ConnectedHost], timeout: Duration) extends Actor with ActorLogging {
 
-    context.setReceiveTimeout(timeout)
+    import RequestActor._
+    import context.dispatcher
 
     var errors: Map[InetAddress, AthenaResponse] = Map.empty
+
+    timeout match {
+      case t: FiniteDuration =>
+        context.system.scheduler.scheduleOnce(t) {
+          self ! QueryTimeoutExceeded
+        }
+      case _ =>
+        log.debug("Using infinite timeout for request.")
+    }
 
     override def preStart() {
       attemptRequest(originalRequest)
     }
 
-    def sendResponse(r: AthenaResponse) {
+    def sendResponse(r: Any) {
       //the response should come from the parent, not us.
       respondTo.tell(r, context.parent)
+      context.stop(self)
     }
 
     //The retry count here is intended to model the number of logical query attempts
@@ -385,12 +394,11 @@ private[athena] object ClusterConnector {
         host.connection ! request
         context.become {
 
-          case ReceiveTimeout =>
-            log.warning("Request to host {} timed out before response received.", host.addr)
-            errors = errors.updated(host.addr, Timedout(originalRequest))
-            attemptRequest(request, retryCount)
+          case QueryTimeoutExceeded =>
+            log.warning("Query timeout exceeded.", host.addr)
+            sendResponse(Timedout(originalRequest))
 
-          case x: AthenaResponse if sender() != host.connection =>
+          case x if sender() != host.connection =>
             log.warning("Received response from an unexpected host. This could be due to a previous timeout.")
 
           case x@ErrorResponse(_, Errors.OverloadedError(msg, errorHost)) =>
@@ -422,16 +430,13 @@ private[athena] object ClusterConnector {
 
               case resp: AthenaResponse if resp.isFailure =>
                 sendResponse(Responses.ErrorResponse(request, InternalError(s"Unexpected response to request - $resp")))
-                context.stop(self)
 
               case x: Failure =>
-                respondTo.tell(x, context.parent)
-                context.stop(self)
+                sendResponse(x)
 
               case unknown =>
                 log.error("Unknown response to request - {}", unknown.toString.take(200))
                 sendResponse(Responses.ErrorResponse(request, InternalError(s"Unexpected response to request.")))
-                context.stop(self)
             }
 
           //TODO: handle read and write timeout errors
@@ -439,9 +444,8 @@ private[athena] object ClusterConnector {
 
 
           case resp@Prepared(_, stmtDef) =>
-            sendResponse(resp)
             context.parent ! StatementPrepared(stmtDef)
-            context.stop(self)
+            sendResponse(resp)
 
           case resp: AthenaResponse =>
             if(resp.isFailure) {
@@ -450,17 +454,14 @@ private[athena] object ClusterConnector {
               attemptRequest(request, retryCount)
             } else {
               sendResponse(resp)
-              context.stop(self)
             }
 
           case x: Failure =>
-            respondTo.tell(x, context.parent)
-            context.stop(self)
+            sendResponse(x)
 
           case unknown =>
             log.error("Received unknown response - {}", unknown.toString.take(200))
             sendResponse(Responses.ErrorResponse(request, InternalError(s"Unexpected response to request.")))
-            context.stop(self)
         }
       }
 
@@ -485,6 +486,9 @@ private[athena] object ClusterConnector {
   }
 
   private object RequestActor {
+
+    private case object QueryTimeoutExceeded
+
     def props(req: AthenaRequest, respondTo: ActorRef, plan: Iterator[ConnectedHost], timeout: Duration) =
       Props(new RequestActor(req, respondTo, plan, timeout))
   }
