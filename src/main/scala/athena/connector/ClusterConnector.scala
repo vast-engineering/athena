@@ -118,8 +118,6 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
       context.unwatch(listener)
       statusListeners = statusListeners - listener
 
-    case ClusterStatusRequest =>
-
     case x: StatementPrepared =>
       preparedStatements = preparedStatements.updated(x.stmtDef.id, x.stmtDef)
       pools.values.foreach(_ ! x)
