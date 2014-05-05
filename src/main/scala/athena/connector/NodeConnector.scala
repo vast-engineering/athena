@@ -132,8 +132,12 @@ private[athena] class NodeConnector(commander: ActorRef,
         }
         preparingStatements()
 
-      case ConnectionAttemptFailed(_, error) =>
-        log.warning("Connection to {} failed due to error {}. Reconnecting.", remoteAddress.getHostString, error)
+      case ConnectionAttemptFailed(_, Some(error)) =>
+        log.warning("Connection to {} failed due to error {}. Scheduling reconnect.", remoteAddress.getHostString, error)
+        reconnecting(retryCount + 1)
+
+      case ConnectionAttemptFailed(_, None) =>
+        log.warning("Connection to {} failed. Scheduling reconnect.", remoteAddress.getHostString)
         reconnecting(retryCount + 1)
 
       case cmd: Athena.CloseCommand =>
@@ -150,12 +154,13 @@ private[athena] class NodeConnector(commander: ActorRef,
     val delay = reconnectDelay(retryCount)
     log.warning("Host {} is unreachable. Scheduling reconnection attempt in {}", remoteAddress.getHostString, delay)
     val reconnectJob = context.system.scheduler.scheduleOnce(delay) {
-      log.debug("Attempting reconnection to {}", remoteAddress.getHostString)
+      log.debug("Reconnect delay fired - reconnecting to {}", remoteAddress.getHostString)
       self ! InternalReconnect
     }
     
     val behavior: Receive = {
       case Reconnect =>
+        log.info("Reconnecting to {}", remoteAddress.getHostString)
         reconnectJob.cancel()
         context.become(connecting(0))
 
@@ -750,7 +755,7 @@ private[athena] object NodeConnector {
     override def receive: Actor.Receive = {
 
       case Athena.ConnectionFailed(addr, error) =>
-        log.error("Could not connect to {} - {}", addr, error)
+        log.debug("Could not connect to {} - {}", addr, error)
         context.parent ! ConnectionAttemptFailed(keyspace, error)
         context.stop(self)
 
