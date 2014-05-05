@@ -44,7 +44,7 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
     )
   }
 
-  private[this] val defaultRequestTimeout = settings.localNodeSettings.connectionSettings.requestTimeout
+  private[this] val defaultRequestTimeout = settings.localNodeSettings.connectionSettings.requestTimeout.plus(Duration(5, TimeUnit.SECONDS))
 
   private[this] val routingPlan = new RoutingPlan()
 
@@ -385,9 +385,13 @@ private[athena] object ClusterConnector {
         host.connection ! request
         context.become {
 
-          case x if sender() != host.connection =>
+          case ReceiveTimeout =>
+            log.warning("Request to host {} timed out before response received.", host.addr)
+            errors = errors.updated(host.addr, Timedout(originalRequest))
+            attemptRequest(request, retryCount)
+
+          case x: AthenaResponse if sender() != host.connection =>
             log.warning("Received response from an unexpected host. This could be due to a previous timeout.")
-            log.warning("Discarding response - {}", x)
 
           case x@ErrorResponse(_, Errors.OverloadedError(msg, errorHost)) =>
             errors = errors.updated(host.addr, x)
@@ -421,22 +425,18 @@ private[athena] object ClusterConnector {
                 context.stop(self)
 
               case x: Failure =>
-                log.warning("Received failure response to request {}. This shouldn't happen.", request)
                 respondTo.tell(x, context.parent)
                 context.stop(self)
 
               case unknown =>
-                sendResponse(Responses.ErrorResponse(request, InternalError(s"Unexpected response to request - $unknown")))
+                log.error("Unknown response to request - {}", unknown.toString.take(200))
+                sendResponse(Responses.ErrorResponse(request, InternalError(s"Unexpected response to request.")))
                 context.stop(self)
             }
 
           //TODO: handle read and write timeout errors
           // read and write timeouts should increment the retryCount if they fail.
 
-          case ReceiveTimeout =>
-            log.warning("Request to host {} timed out before response received.")
-            errors = errors.updated(host.addr, Timedout(originalRequest))
-            attemptRequest(request, retryCount)
 
           case resp@Prepared(_, stmtDef) =>
             sendResponse(resp)
@@ -454,13 +454,12 @@ private[athena] object ClusterConnector {
             }
 
           case x: Failure =>
-            log.warning("Received failure response to request {}. This shouldn't happen.", request)
             respondTo.tell(x, context.parent)
             context.stop(self)
 
           case unknown =>
-            log.error("Received unknown response to request - {}", unknown)
-            sendResponse(Responses.ErrorResponse(request, InternalError(s"Unexpected response to request - $unknown")))
+            log.error("Received unknown response - {}", unknown.toString.take(200))
+            sendResponse(Responses.ErrorResponse(request, InternalError(s"Unexpected response to request.")))
             context.stop(self)
         }
       }

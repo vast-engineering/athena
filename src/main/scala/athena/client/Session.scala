@@ -179,10 +179,10 @@ object Session {
                      values: Seq[CValue] = Seq(),
                      consistency: Option[Consistency] = None,
                      serialConsistency: Option[SerialConsistency] = None): Enumerator[Row] = {
-      queryLog.info("Streaming query {} with params {}", query, values)
+      queryLog.info("Streaming query {} with params {}", query, values.toString().take(200))
       val rate = new Rate
       streamPipe(SimpleStatement(query, values, Some(keyspace), consistency, serialConsistency)).onDoneEnumerating {
-        queryLog.info(" Finished streaming query {} with params {} {}", query, values, rate)
+        queryLog.info(" Finished streaming query {} with params {} {}", query, values.toString().take(200), rate)
       }
     }
 
@@ -191,10 +191,10 @@ object Session {
                       consistency: Option[Consistency] = None,
                       serialConsistency: Option[SerialConsistency] = None): Enumerator[Row] = {
       val bound = BoundStatement(statement, values, None, consistency, serialConsistency)
-      queryLog.info("Streaming prepared query {} with params {}", statement.rawQuery, values)
+      queryLog.info("Streaming prepared query {} with params {}", statement.rawQuery, values.toString().take(200))
       val rate = new Rate
       streamPipe(bound).onDoneEnumerating {
-        queryLog.info(" Finished streaming prepared query {} with params {} {}", statement.rawQuery, values, rate)
+        queryLog.info(" Finished streaming prepared query {} with params {} {}", statement.rawQuery, values.toString().take(200), rate)
       }
     }
 
@@ -202,10 +202,10 @@ object Session {
                 values: Seq[CValue] = Seq(),
                 consistency: Option[Consistency] = None,
                 serialConsistency: Option[SerialConsistency] = None): Future[Seq[Row]] = {
-      queryLog.info("Executing query {} with params {}", query, values)
+      queryLog.info("Executing query {} with params {}", query, values.toString().take(200))
       val rate = new Rate
       queryPipe(SimpleStatement(query, values, Some(keyspace), consistency, serialConsistency)).andThen {
-        case _ => queryLog.info(" Executed query {} with params {} {}", query, values, rate)
+        case _ => queryLog.info(" Executed query {} with params {} {}", query, values.toString().take(200), rate)
       }
     }
 
@@ -214,10 +214,10 @@ object Session {
                 consistency: Option[Consistency] = None,
                 serialConsistency: Option[SerialConsistency] = None): Future[Seq[Row]] = {
       val bound = BoundStatement(statement, values, None, consistency, serialConsistency)
-      queryLog.info("Streaming prepared query {} with params {}", statement.rawQuery, values)
+      queryLog.info("Streaming prepared query {} with params {}", statement.rawQuery, values.toString().take(200))
       val rate = new Rate
       queryPipe(bound).andThen {
-        case _ => queryLog.info(" Finished streaming prepared query {} with params {} {}", statement.rawQuery, values, rate)
+        case _ => queryLog.info(" Finished streaming prepared query {} with params {} {}", statement.rawQuery, values.toString().take(200), rate)
       }
     }
 

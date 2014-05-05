@@ -274,7 +274,7 @@ object Athena extends ExtensionKey[AthenaExt] {
     def createMessage(message: String, consistency: Consistency, received: Int, required: Int, dataPresent: Boolean): String = {
 
       val suffix = if (received < required)
-        s"$required responses were required but only %$received replicas responded"
+        s"$required responses were required but only $received replicas responded"
       else if (!dataPresent)
         "the replica queried for data didn't respond"
       else

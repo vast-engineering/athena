@@ -390,7 +390,7 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
           }
         } else {
           val ctxOption = requestTracker.removeRequest(env.streamId)
-          ctxOption.fold(log.error(s"Discarded response ${env.response} due to unknown stream ID ${env.streamId} - possibly due to timeout.")) { requestContext =>
+          ctxOption.fold(log.error(s"Discarded response due to unknown stream ID ${env.streamId} - possibly due to timeout.")) { requestContext =>
             val response = (requestContext.command, env.response) match {
               case (RequestCommand(request), resp) =>
                 CommandConverters.convertResponse(request, resp)
@@ -443,9 +443,11 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
           case (streamId, requestInfo) =>
             requestTracker.removeRequest(streamId).foreach { rCtx =>
               val errorResponse = rCtx.command match {
-                case RequestCommand(request) => Timedout(request)
+                case x@RequestCommand(request) =>
+                  log.error("Request Command timed out - {}", x.toString().take(200))
+                  Timedout(request)
                 case x =>
-                  log.error("Connection command timed out - {}", x)
+                  log.error("Connection command timed out - {}", x.toString().take(200))
                   ConnectionCommandFailed(x)
               }
 

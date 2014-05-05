@@ -60,6 +60,7 @@ private[athena] class NodeConnector(commander: ActorRef,
     Timeout(settings.connectionSettings.requestTimeout.length, settings.connectionSettings.requestTimeout.unit)
   } else {
     //just use a default timeout of 10 seconds
+    log.warning("Node connector using default timeout.")
     Timeout(10, TimeUnit.SECONDS)
   }
 
@@ -318,7 +319,7 @@ private[athena] class NodeConnector(commander: ActorRef,
   }
 
   private def dispatch(pending: PendingRequest) {
-    pending.promise.completeWith(dispatch(pending.request))
+    pending.promise.tryCompleteWith(dispatch(pending.request))
   }
 
   private def dispatch(request: AthenaRequest): Future[AthenaResponse] = {
@@ -638,8 +639,8 @@ private[athena] class NodeConnector(commander: ActorRef,
         Future.successful(resp)
 
       case unknown =>
-        log.error("Unknown response to request - {}", unknown)
-        throw new InternalException(s"Unknown response to request. Request - $request Response - $unknown")
+        log.error("Unknown response to request - {}", unknown.toString().take(200))
+        throw new InternalException(s"Unknown response to request.")
     } recover {
       case e: AskTimeoutException =>
         log.error("Request timed out!")
@@ -648,7 +649,6 @@ private[athena] class NodeConnector(commander: ActorRef,
 
     requestF.onComplete {
       case _ =>
-        //log.debug("Response completed. Request - {}", request)
         self ! RequestCompleted(connection)
     }
 
