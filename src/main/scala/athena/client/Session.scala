@@ -87,6 +87,23 @@ object Session {
   }
 
   /**
+   * Create a session using an already existing (and assumed valid) Connection ActorRef.
+   */
+  def apply(connection: Future[ActorRef], keyspace: String)
+           (implicit logSource: LoggingSource, log: LoggingContext, ec: ExecutionContext): Session = {
+    //connection.map(c => validateKeyspace(c, keyspace)
+    val validated = connection.flatMap(c => validateKeyspace(c, keyspace))
+    new SimpleSession(pipelining.pipeline(validated), keyspace) {
+      /**
+       * This method must be called to properly dispose of the Session.
+       */
+      override def close() {
+        //do nothing
+      }
+    }
+  }
+
+  /**
    * Create a session using an existing ActorSystem
    */
   def apply(initialHosts: Set[InetAddress], port: Int, keyspace: String,
