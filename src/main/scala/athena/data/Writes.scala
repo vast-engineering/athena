@@ -38,8 +38,16 @@ trait DefaultWrites {
     def writes(value: Int): CValue = CInt(value)
   }
 
+  implicit object LongWrites extends Writes[Long] {
+    override def writes(value: Long): CValue = CBigInt(value)
+  }
+
   implicit object DoubleWrites extends Writes[Double] {
     def writes(value: Double): CValue = CDouble(value)
+  }
+
+  implicit object FloatWrites extends Writes[Float] {
+    override def writes(value: Float): CValue = CFloat(value)
   }
 
   implicit object DateTimeWrites extends Writes[DateTime] {

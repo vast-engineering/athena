@@ -76,7 +76,7 @@ object Session {
    */
   def apply(connection: ActorRef, keyspace: String)
            (implicit logSource: LoggingSource, log: LoggingContext, ec: ExecutionContext): Session = {
-    new SimpleSession(pipelining.pipeline(validateKeyspace(connection, keyspace)), keyspace) {
+    new SimpleSession(pipelining.pipeline(connection), keyspace) {
       /**
        * This method must be called to properly dispose of the Session.
        */
@@ -91,9 +91,7 @@ object Session {
    */
   def apply(connection: Future[ActorRef], keyspace: String)
            (implicit logSource: LoggingSource, log: LoggingContext, ec: ExecutionContext): Session = {
-    //connection.map(c => validateKeyspace(c, keyspace)
-    val validated = connection.flatMap(c => validateKeyspace(c, keyspace))
-    new SimpleSession(pipelining.pipeline(validated), keyspace) {
+    new SimpleSession(pipelining.pipeline(connection), keyspace) {
       /**
        * This method must be called to properly dispose of the Session.
        */
@@ -146,7 +144,7 @@ object Session {
     val connectTimeout = if (waitForConnect) defaultTimeoutDuration else Duration.Inf
     val setup = Athena.ClusterConnectorSetup(hosts, port, None)
     val initializer = actorRefFactory.actorOf(Props(new ConnectorInitializer(connectTimeout)))
-    initializer.ask(setup).mapTo[ActorRef].flatMap(c => validateKeyspace(c, keyspace))
+    initializer.ask(setup).mapTo[ActorRef]
   }
 
   private class ConnectorInitializer(connectTimeout: Duration) extends Actor with ActorLogging {

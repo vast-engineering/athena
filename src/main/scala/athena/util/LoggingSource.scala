@@ -12,8 +12,10 @@ trait DefaultLoggingSource extends LSLowPriorityImplicits {
   import scala.language.implicitConversions
 
   implicit def fromActorRefFactory(implicit refFactory: ActorRefFactory): LoggingSource =
-    fromSystem(spray.util.actorSystem(refFactory))
-
+    refFactory match {
+      case x: ActorSystem  ⇒ fromSystem(x)
+      case x: ActorContext ⇒ fromSystem(x.system)
+    }
 
 }
 
