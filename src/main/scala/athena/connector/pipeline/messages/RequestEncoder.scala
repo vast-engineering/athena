@@ -3,11 +3,9 @@ package athena.connector.pipeline.messages
 import akka.util.ByteString
 import java.nio.ByteOrder
 
-import athena.connector._
-import athena.data._
 import athena.connector.CassandraRequests._
 import athena.util.ByteStringUtils
-import athena.Consistency
+import athena.SerialConsistency
 
 private[connector] object RequestEncoder {
 
@@ -60,7 +58,7 @@ private[connector] object RequestEncoder {
       suffixBuilder.append(ps)
     }
 
-    if (queryParams.serialConsistency != Consistency.SERIAL) {
+    if (queryParams.serialConsistency != SerialConsistency.SERIAL) {
       flags = flags | 16
       suffixBuilder.putShort(queryParams.serialConsistency.id)
     }
