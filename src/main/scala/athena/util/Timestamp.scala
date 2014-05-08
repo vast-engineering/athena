@@ -14,7 +14,7 @@ class Timestamp private (val timestampNanos: Long) extends AnyVal {
     else if (other.isNever) Duration.MinusInf
     else (timestampNanos - other.timestampNanos).nanos
 
-  def isPast: Boolean = System.nanoTime() >= timestampNanos
+  def isPast: Boolean = (System.nanoTime() - Timestamp.zero) >= timestampNanos
   def isPast(now: Timestamp): Boolean = now.timestampNanos >= timestampNanos
   def isFuture: Boolean = !isPast
 
@@ -23,7 +23,8 @@ class Timestamp private (val timestampNanos: Long) extends AnyVal {
 }
 
 object Timestamp {
-  def now: Timestamp = new Timestamp(System.nanoTime())
+  private val zero = System.nanoTime()
+  def now: Timestamp = new Timestamp(System.nanoTime()-zero)
   def never: Timestamp = new Timestamp(Long.MaxValue)
 
   implicit val timestampOrdering: Ordering[Timestamp] = new Ordering[Timestamp] {
