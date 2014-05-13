@@ -84,7 +84,10 @@ trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender wit
     val connector = {
       IO(Athena).tell(Athena.ClusterConnectorSetup(hosts, port, None), probe.ref)
       probe.expectMsgType[Athena.ClusterConnectorInfo]
-      probe.expectMsg(Athena.ClusterConnected)
+      probe.fishForMessage() {
+        case Athena.ClusterConnected => true
+        case x: Athena.ClusterStatusEvent => false
+      }
       probe.lastSender
     }
 

@@ -8,9 +8,11 @@ import org.joda.time.DateTime
 import java.util.{UUID, Date}
 import java.net.InetAddress
 
-import play.api.libs.json.{Reads => JsonReads, JsError, JsSuccess, Json, JsValue}
+import play.api.libs.json.{Reads => JsonReads, _}
 import com.fasterxml.jackson.core.JsonParseException
 import scala.reflect.ClassTag
+import play.api.libs.json.JsSuccess
+import scala.Some
 
 /**
  * A trait that defines a class that can convert from a type A value to another type B.
@@ -65,42 +67,31 @@ trait Reads[A] {
 
 }
 
-object Reads extends DefaultReads with MetaReaders {
+object Reads extends DefaultReads {
+  def of[A](implicit ra: Reads[A]): Reads[A] = ra
+
   def apply[A](f: CValue => CvResult[A]): Reads[A] = new Reads[A] {
     override def read(cvalue: CValue): CvResult[A] = f(cvalue)
   }
-}
 
-trait MetaReaders {
-
-  def jsonReads[T](implicit jsReader: JsonReads[T]): Reads[T] = Reads[T] { cvalue =>
-    cvalue.validate[JsValue].flatMap { jsValue =>
-      jsReader.reads(jsValue) match {
-        case JsSuccess(obj, _) => CvSuccess(obj)
-        case JsError(errors) =>
-          val cErrors = errors.map { error =>
-            s"${error._1} -> ${error._2.mkString(", ")}"
-          }
-          CvError(cErrors)
+  def fromJsResult[A](r: JsResult[A]): CvResult[A] = r match {
+    case JsSuccess(obj, _) => CvSuccess(obj)
+    case JsError(errors) =>
+      val cErrors = errors.map { error =>
+        s"${error._1} -> ${error._2.mkString(", ")}"
       }
+      CvError(cErrors)
+  }
+
+  def jsonReads[T](implicit jsValueReader: Reads[JsValue], jsReader: JsonReads[T]): Reads[T] = Reads[T] { cvalue =>
+    cvalue.validate[JsValue].flatMap { jsValue =>
+      fromJsResult(jsReader.reads(jsValue))
     }
   }
 
 }
 
-//trait ConstraintReads {
-//  implicit def ofValue[A <: CValue](implicit ct: ClassTag[A]): Reads[A] = Reads[A] {
-//    case x: A => CvSuccess(x)
-//    case x => CvError(s"expected value of type ${ct.runtimeClass.getName}")
-//  }
-//
-//}
-
 trait DefaultReads {
-
-//  implicit object CValueReads extends Reads[CValue] {
-//    def reads(cvalue: CValue): CvResult[CValue] = CvSuccess(cvalue)
-//  }
 
   implicit def optionReads[T](implicit rt: Reads[T]): Reads[Option[T]] = new Reads[Option[T]] {
       def read(cvalue: CValue): CvResult[Option[T]] = cvalue match {
@@ -191,34 +182,31 @@ trait DefaultReads {
     case CInetAddress(address) => CvSuccess(address)
   }
 
-  implicit val JsValueReads: Reads[JsValue] = {
-
-    nonNull {
-      case CASCIIString(data) =>
-        try {
-          CvSuccess(Json.parse(data))
-        } catch {
-          case e: JsonParseException => CvError(s"Could not parse value as JSON - ${e.getMessage}")
-        }
-      case CVarChar(data) =>
-        try {
-          CvSuccess(Json.parse(data))
-        } catch {
-          case e: JsonParseException => CvError(s"Could not parse value as JSON - ${e.getMessage}")
-        }
-      case CBlob(bytes) =>
-        try {
-          CvSuccess(Json.parse(bytes.toArray))
-        } catch {
-          case e: JsonParseException => CvError(s"Could not parse value as JSON - ${e.getMessage}")
-        }
-    }
+  implicit val JsValueReads: Reads[JsValue] = nonNull {
+    case CASCIIString(data) =>
+      try {
+        CvSuccess(Json.parse(data))
+      } catch {
+        case e: JsonParseException => CvError(s"Could not parse value as JSON - ${e.getMessage}")
+      }
+    case CVarChar(data) =>
+      try {
+        CvSuccess(Json.parse(data))
+      } catch {
+        case e: JsonParseException => CvError(s"Could not parse value as JSON - ${e.getMessage}")
+      }
+    case CBlob(bytes) =>
+      try {
+        CvSuccess(Json.parse(bytes.toArray))
+      } catch {
+        case e: JsonParseException => CvError(s"Could not parse value as JSON - ${e.getMessage}")
+      }
   }
 
   implicit def mapReads[A, B](implicit keyReads: Reads[A], valueReads: Reads[B], a: TypeTag[A], b: TypeTag[B]): Reads[Map[A, B]] = reads {
     case CNull => CvSuccess(Map.empty)
     case CMap(values) =>
-      val converted: Iterable[CvResult[(A, B)]] = values.map {
+      val converted = values.map {
         case (key, value) => keyReads.read(key).zip(valueReads.read(value))
       }
       CvResult.sequence(converted).map(_.toMap)

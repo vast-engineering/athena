@@ -18,6 +18,8 @@ private[athena] class AthenaManager(globalSettings: AthenaExt#Settings) extends 
   private[this] val nodeConnectorCounter = Iterator from 0
   private[this] val clusterConnectorCounter = Iterator from 0
 
+  private[this] var connectors: Map[ClusterConnectorSetup, ActorRef] = Map.empty
+
   def receive = {
     case connect: Athena.Connect =>
       val commander = sender()
@@ -36,12 +38,40 @@ private[athena] class AthenaManager(globalSettings: AthenaExt#Settings) extends 
 
     case setup: ClusterConnectorSetup =>
       val connectCommander = sender()
-      val normal = setup.normalized
-      val connector = context.actorOf(
-        props = ClusterConnector.props(connectCommander, normal),
+      val connector = clusterConnectorFor(setup.normalized)
+      connectCommander.tell(Athena.ClusterConnectorInfo(connector, setup), connector)
+      connector ! Athena.AddClusterStatusListener(connectCommander)
+
+    case Terminated(child) =>
+      if (connectors.exists(_._2 == child)) {
+        connectors = connectors.filter(_._2 != child)
+      } else {
+        log.warning("Got terminated message for unexpected Actor! {}", child)
+      }
+
+  }
+
+  private def clusterConnectorFor(normalizedSetup: ClusterConnectorSetup): ActorRef = {
+    def createConnector(): ActorRef = {
+      log.debug("Creating new cluster connector for {}", normalizedSetup)
+      context.actorOf(
+        props = ClusterConnector.props(normalizedSetup),
         name = "cluster-connector-" + clusterConnectorCounter.next()
       )
-      connectCommander.tell(Athena.ClusterConnectorInfo(connector, setup), connector)
+    }
+    def createAndRegisterHostConnector() = {
+      val connector = createConnector
+      connectors = connectors.updated(normalizedSetup, connector)
+      context.watch(connector)
+    }
+    if(normalizedSetup.useExisting) {
+      connectors.getOrElse(normalizedSetup, createAndRegisterHostConnector())
+    } else {
+      //create a brand new connector
+      createConnector()
+    }
   }
+
+
 
 }

@@ -58,6 +58,7 @@ object RowReader {
     }
   }
 
+
   implicit object IdentityReads extends RowReader[Row] {
     override def read(row: Row): CvResult[Row] = CvSuccess(row)
   }
@@ -67,13 +68,51 @@ object RowReader {
   import shapeless._
   import scala.language.implicitConversions
   import shapeless.Nat._0
+  import ShapelessUtils._
+
+  implicit def rowReaderReducer[H, T, Out0 <: HList](implicit append: Appender.Aux[H, T, Out0]): Reducer.Aux[RowReader, H, T, Out0] = new Reducer[RowReader, H, T] {
+    type Out = Out0
+
+    override def apply(mh: RowReader[H], mt: RowReader[T]): RowReader[Out] = RowReader[Out0] { row =>
+      val head: CvResult[H] = mh.read(row)
+      val tail: CvResult[T] = mt.read(row)
+      (head, tail) match {
+        case (CvError(leftError), CvError(rightError)) => CvError(leftError ++ rightError)
+        case (left@CvError(_), _) => left
+        case (_, right@CvError(_)) => right
+        case (CvSuccess(h), CvSuccess(t)) =>
+          CvSuccess(append(h, t))
+      }
+    }
+  }
+
+  implicit class RowReaderOps[A](val ra: RowReader[A]) extends AnyVal {
+    //The :: operator is right associative, so that the syntax
+    // at[Int]("foo") :: at[String]("bar") :: at[Long]("quux")
+    // does the right thing in the most efficient manner
+    // The expression above should yield a RowReader[Int :: String :: Long :: HNil]
+    def ::[H, Out <: HList](rh: RowReader[H])(implicit reducer: Reducer.Aux[RowReader, H, A, Out]): RowReader[Out] = {
+      reducer(rh, ra)
+    }
+  }
+
+  implicit class HListReaderOps[L <: HList](val rl: RowReader[L]) extends AnyVal {
+    def tupled(implicit tupler: Tupler[L]): RowReader[tupler.Out] = {
+      rl.map(l => tupler(l))
+    }
+    def transform[A, F](f: F)(implicit fnhlister: FnHListerAux[F, L => A]): RowReader[A] = {
+      rl.map(fnhlister(f))
+    }
+  }
+
 
   def read[A <: Product, B](f: B => A)(implicit r: RowReader[B]): RowReader[A] = r.map(f)
 
   implicit val unitReads: RowReader[Unit] = RowReader[Unit] { row => CvSuccess(()) }
 
-  implicit def tupleReads[T <: Product, L <: HList](implicit tupler: TuplerAux[L, T], hlr: IndexedRowReader[L, _0]): RowReader[T] =
-    hlr.map(l => tupler(l))
+  implicit def tupleReads[T <: Product, L <: HList](implicit tupler: TuplerAux[L, T], hlr: IndexedRowReader[L, _0]): RowReader[T] = {
+    hlr.map[T]((l: L) => tupler(l))
+  }
 
   implicit def hlistReads[L <: HList](implicit hlr: IndexedRowReader[L, _0]): RowReader[L] = hlr
 
@@ -86,20 +125,13 @@ object RowReader {
         override def read(cvalue: Row): CvResult[HNil] = CvSuccess(HNil)
       }
 
-    implicit def hlistRowReader[H, T <: HList, N <: Nat](implicit rh: Reads[H], rt: IndexedRowReader[T, Succ[N]], ti: ToInt[N]): IndexedRowReader[H :: T, N] =
+    implicit def hlistIndexedRowReader[H, T <: HList, N <: Nat](implicit rh: Reads[H], rt: IndexedRowReader[T, Succ[N]], ti: ToInt[N], reducer: Reducer.Aux[RowReader, H, T, H :: T]): IndexedRowReader[H :: T, N] = {
+      val headReads = at[H](ti.apply())(rh)
+      val reads = reducer(headReads, rt)
       new IndexedRowReader[H :: T, N] {
-        val pathReads = at[H](ti.apply())(rh)
-        override def read(row: Row): CvResult[::[H, T]] = {
-          val head = pathReads.read(row)
-          val tail = rt.read(row)
-          (head, tail) match {
-            case (CvError(leftError), CvError(rightError)) => CvError(leftError ++ rightError)
-            case (left@CvError(_), _) => left
-            case (_, right@CvError(_)) => right
-            case (CvSuccess(a), CvSuccess(b)) =>
-              CvSuccess(a :: b)
-          }
-        }
+        override def read(cvalue: Row): CvResult[H :: T] = reads.read(cvalue)
       }
+
+    }
   }
 }

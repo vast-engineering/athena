@@ -33,7 +33,7 @@ sealed trait CvResult[+A] {
     case e: CvError => e
   }
 
-  def combine[B, X](that: CvResult[B])(combiner: (A, B) => X): CvResult[X] = (this, that) match {
+  def reduce[B, X](that: CvResult[B])(combiner: (A, B) => X): CvResult[X] = (this, that) match {
     case (CvError(leftError), CvError(rightError)) => CvError(leftError ++ rightError)
     case (left: CvError, right: CvSuccess[B]) => left
     case (left: CvSuccess[A], right: CvError) => right
@@ -62,7 +62,7 @@ sealed trait CvResult[+A] {
     case e: CvError => e
   }
 
-  def zip[X](that: CvResult[X]): CvResult[(A, X)] = combine(that) { (left, right) => (left, right) }
+  def zip[X](that: CvResult[X]): CvResult[(A, X)] = reduce(that) { (left, right) => (left, right) }
 
   def foreach(f: A => Unit): Unit = this match {
     case CvSuccess(a) => f(a)
@@ -108,7 +108,7 @@ object CvResult {
   def sequence[A, M[_] <: TraversableOnce[_]](in: M[CvResult[A]])(implicit cbf: CanBuildFrom[M[CvResult[A]], A, M[A]]): CvResult[M[A]] = {
     val zero: CvResult[mutable.Builder[A, M[A]]] = CvSuccess(cbf(in))
     in.foldLeft(zero) { (acc, res) =>
-        acc.combine(res.asInstanceOf[CvResult[A]])( (builder, a) => builder += a )
+        acc.reduce(res.asInstanceOf[CvResult[A]])( (builder, a) => builder += a )
     }.map(_.result())
   }
 }

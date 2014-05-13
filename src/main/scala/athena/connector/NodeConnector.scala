@@ -323,7 +323,7 @@ private[athena] class NodeConnector(commander: ActorRef,
     log.debug("Killing all active connections.")
     val closeActors = shutdownAll(command).map(context.watch)
 
-    closeStep(closeActors.toSet, command, commanders)
+    closeStep(closeActors, command, commanders)
   }
 
   private def dispatch(pending: PendingRequest) {
@@ -516,12 +516,6 @@ private[athena] class NodeConnector(commander: ActorRef,
 
   }
 
-  private[this] val closerCounter = Iterator from 0
-  private def shutdownConnection(connection: ActorRef, cmd: Athena.CloseCommand = Athena.Close): ActorRef = {
-    removeConnection(connection)
-    context.actorOf(CloseActor.props(connection, cmd, settings.connectionSettings.socketSettings.connectTimeout), name = s"pool-closer-${closerCounter.next()}")
-  }
-
   private def spawnNewConnection(keyspace: Option[String] = None) {
     log.debug("Spawning new connection to keyspace {}", keyspace)
 
@@ -626,11 +620,17 @@ private[athena] class NodeConnector(commander: ActorRef,
   }
 
 
+  private[this] val closerCounter = Iterator from 0
   private def shutdownAll(command: Athena.CloseCommand = Athena.Close): Set[ActorRef] = {
     //bounce all pending requests
     pendingRequests.foreach(x => x.promise.trySuccess(ConnectionUnavailable(x.request)))
-    //close all existing connections
-    liveConnections.keys.toSet[ActorRef].map(connection => shutdownConnection(connection, command))
+    pendingRequests.clear()
+    //close all existing connections - they have 4 seconds to die
+    val closeActors: Set[ActorRef] = liveConnections.keys.map { connection =>
+      context.actorOf(CloseActor.props(connection, Athena.Close, FiniteDuration(4, TimeUnit.SECONDS)), name = s"pool-closer-${closerCounter.next()}")
+    }(collection.breakOut)
+    liveConnections.clear()
+    closeActors
   }
 
   //SHOULD ONLY BE CALLED FROM THIS ACTOR'S RECEIVE LOOP - THIS MODIFIES STATE.

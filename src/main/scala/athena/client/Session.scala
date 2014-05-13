@@ -19,7 +19,7 @@ import athena.Requests.{BoundStatement, Prepare, SimpleStatement}
 import java.util.concurrent.TimeUnit
 import java.net.InetAddress
 import scala.concurrent.duration.{FiniteDuration, Duration}
-import scala.concurrent.{Promise, ExecutionContext, Future}
+import scala.concurrent.{Await, Promise, ExecutionContext, Future}
 import spray.util.LoggingContext
 import athena.client.pipelining.Pipeline
 import athena.util.{LoggingSource, Rate}
@@ -62,6 +62,7 @@ trait Session {
 
   /**
    * This method must be called to properly dispose of the Session.
+   * Note - THIS METHOD BLOCKS THE CURRENT THREAD.
    */
   def close()
 }
@@ -107,12 +108,13 @@ object Session {
   def apply(initialHosts: Set[InetAddress], port: Int, keyspace: String,
             waitForConnection: Boolean = true)(implicit system: ActorRefFactory, log: LoggingContext): Session = {
     import system.dispatcher
-    val connection = getConnection(initialHosts, port, keyspace, system, waitForConnection)
+    val connection = getConnection(initialHosts, port, system, waitForConnection)
     val pipe = pipelining.pipeline(connection)
     new SimpleSession(pipe, keyspace) {
       def close(): Unit = {
+        log.debug("Killing connection actor.")
         //shutdown our actor
-        connection.flatMap { c =>
+        val closeF = connection.flatMap { c =>
           akka.pattern.gracefulStop(c, defaultTimeoutDuration, Athena.Close) recover {
             case NonFatal(e) =>
               //hard kill the actor
@@ -122,65 +124,84 @@ object Session {
         } andThen {
           case _ => log.info("Athena session terminated.")
         }
+        try {
+          Await.result(closeF, defaultTimeoutDuration)
+        } catch {
+          case NonFatal(e) =>
+            log.info("Exception closing session - {}", e)
+        }
       }
     }
   }
 
-  private def validateKeyspace(connection: ActorRef, keyspace: String)(implicit ec: ExecutionContext, log: LoggingContext): Future[ActorRef] = {
+  private def getConnection(hosts: Set[InetAddress], port: Int,
+                            actorRefFactory: ActorRefFactory,
+                            waitForConnect: Boolean = true): Future[ActorRef] = {
+    import actorRefFactory.dispatcher
     import akka.pattern._
+    val setup = Athena.ClusterConnectorSetup(hosts, port)
 
-    connection.ask(SimpleStatement("SELECT * FROM schema_keyspaces where keyspace_name = ?", Seq(CVarChar(keyspace)), Some("system"))).map {
-      case Rows(_, _, data, _) if data.size == 1 => connection
-      case _ =>
-        log.error("Could not validate keyspace {}", keyspace)
-        throw new AthenaException(s"Invalid keyspace $keyspace")
+    if(waitForConnect) {
+      val initializer = actorRefFactory.actorOf(Props(new ConnectorInitializer(defaultTimeoutDuration)))
+      initializer.ask(setup).mapTo[ActorRef]
+    } else {
+      IO(Athena)(spray.util.actorSystem(actorRefFactory)).ask(setup).mapTo[Athena.ClusterConnectorInfo].map(_.clusterConnector)
     }
   }
 
-  private def getConnection(hosts: Set[InetAddress], port: Int,
-                            keyspace: String, actorRefFactory: ActorRefFactory,
-                            waitForConnect: Boolean = true): Future[ActorRef] = {
-    import actorRefFactory.dispatcher
-    val connectTimeout = if (waitForConnect) defaultTimeoutDuration else Duration.Inf
-    val setup = Athena.ClusterConnectorSetup(hosts, port, None)
-    val initializer = actorRefFactory.actorOf(Props(new ConnectorInitializer(connectTimeout)))
-    initializer.ask(setup).mapTo[ActorRef]
-  }
-
-  private class ConnectorInitializer(connectTimeout: Duration) extends Actor with ActorLogging {
+  private class ConnectorInitializer(connectTimeout: FiniteDuration) extends Actor with ActorLogging {
 
     def receive: Receive = {
       case x: Athena.ClusterConnectorSetup =>
         IO(Athena)(context.system) ! x
-        val connectCommander = sender()
-        context.become {
-          case Athena.ClusterConnectorInfo(connector, _) =>
-            log.debug("Got cluster connection actor")
-            context.setReceiveTimeout(connectTimeout)
-            context.become {
-              case Athena.ClusterConnected =>
-                log.debug("Connector initialized - returning connector")
-                connectCommander ! connector
-                context.stop(self)
-
-              case Athena.ClusterFailed(error) =>
-                connectCommander ! Failure(error.toThrowable)
-                context.stop(self)
-
-              case ReceiveTimeout =>
-                log.warning("Timed out waiting for cluster to connect.")
-                connector ! Athena.Abort
-                connectCommander ! Failure(new AthenaException("Timed out waiting for cluster to connect."))
-                context.stop(self)
-            }
-
-          case unexpectedResponse =>
-            log.error("Got unexpected response to cluster creation - {}", unexpectedResponse)
-            connectCommander ! Failure(new AthenaException("Could not create connector."))
-            context.stop(self)
-
-        }
+        waitingForConnector(sender())
     }
+
+    private def waitingForConnector(commander: ActorRef) {
+
+      context.setReceiveTimeout(connectTimeout)
+
+      context.become {
+        case Athena.ClusterConnectorInfo(connector, _) =>
+          log.debug("Got cluster connection actor")
+          waitingForConnection(commander, connector)
+
+        case ReceiveTimeout =>
+          log.warning("Timed out waiting for cluster to connect.")
+          commander ! Failure(new AthenaException("Timed out waiting for cluster to connect."))
+          context.stop(self)
+      }
+    }
+
+    private def waitingForConnection(commander: ActorRef, connector: ActorRef) {
+
+      import context.dispatcher
+      context.setReceiveTimeout(Duration.Inf)
+
+      val timeoutJob = context.system.scheduler.scheduleOnce(connectTimeout) {
+        self ! 'abort
+      }
+
+      context.become {
+        case Athena.ClusterConnected =>
+          log.debug("Connector initialized - returning connector")
+          commander ! connector
+          timeoutJob.cancel()
+          context.stop(self)
+
+        case Athena.ClusterFailed(error) =>
+          commander ! Failure(error.toThrowable)
+          timeoutJob.cancel()
+          context.stop(self)
+
+        case 'abort =>
+          log.warning("Timed out waiting for cluster to connect.")
+          connector ! Athena.Abort
+          commander ! Failure(new AthenaException("Timed out waiting for cluster to connect."))
+          context.stop(self)
+      }
+    }
+
   }
 
   abstract class SimpleSession(pipeline: Pipeline, keyspace: String)

@@ -83,24 +83,30 @@ object Athena extends ExtensionKey[AthenaExt] {
   }
 
   /**
-   * A command to initiate a connection to a cluster of Cassandra nodes.
+   * A command to initiate a connection to a cluster of Cassandra nodes. The sender of this message will receive a
+   * [[ClusterConnectorInfo]] message with information about the cluster connection. Additionally, the sender will
+   * be subscribed to cluster connection status events.
    *
    * @param initialHosts A list of host addressed used to seed the cluster.
    * @param port the port used to connect
    * @param settings Settings for the cluster - if this is not defined, default settings read from the ActorSystem's config will be used.
    * @param failOnInit If true, the cluster conntection will fail at initialization time if no hosts are reachable. If false,
    *                   it will continue to attempt reconnects.
+   * @param useExisting if true, an existing connector initialized with the same settings will be used (if present). If false
+   *                    or there is no active connection, a new connector will be created.
    */
   case class ClusterConnectorSetup(initialHosts: Set[InetAddress], port: Int,
-                                   settings: Option[ClusterConnectorSettings] = None, failOnInit: Boolean = false) extends ConnectionCreationCommand {
+                                   settings: Option[ClusterConnectorSettings] = None,
+                                   failOnInit: Boolean = false,
+                                   useExisting: Boolean = true) extends ConnectionCreationCommand {
     private[athena] def normalized(implicit refFactory: ActorRefFactory) =
       if (settings.isDefined) this
       else copy(settings = Some(ClusterConnectorSettings(actorSystem)))
   }
 
   //Send to a cluster connector actor to monitor (or stop monitoring) it's state
-  case object AddClusterStatusListener extends Command
-  case object RemoveClusterStatusListener extends Command
+  case class AddClusterStatusListener(listener: ActorRef) extends Command
+  case class RemoveClusterStatusListener(listener: ActorRef) extends Command
 
   /**
    * A command suitable for routing to a connection, host or cluster

@@ -26,6 +26,8 @@ object Writes extends DefaultWrites {
     def writes(a: A): CValue = f(a)
   }
 
+  def of[A](implicit w: Writes[A]): Writes[A] = w
+
 }
 
 trait DefaultWrites {

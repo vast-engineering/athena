@@ -2,7 +2,6 @@ package athena.connector
 
 import athena.{Requests, Errors, Responses, Athena}
 import akka.actor._
-import akka.pattern._
 import athena.Requests.AthenaRequest
 import athena.Responses._
 import scala.concurrent.duration.{FiniteDuration, Duration}
@@ -11,7 +10,6 @@ import java.net.{InetSocketAddress, InetAddress}
 import athena.connector.ClusterMonitorActor.{ClusterUnreachable, ClusterReconnected}
 import athena.Athena.NodeDisconnected
 import athena.Responses.RequestFailed
-import scala.Some
 import athena.Athena.ClusterConnectorSetup
 import athena.Athena.NodeConnected
 import athena.Athena.GeneralError
@@ -26,7 +24,7 @@ import athena.data.PreparedStatementDef
 import akka.actor.Status.Failure
 import athena.util.MD5Hash
 
-private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnectorSetup) extends Actor with ActorLogging {
+private[athena] class ClusterConnector(setup: ClusterConnectorSetup) extends Actor with ActorLogging {
 
   import ClusterConnector._
 
@@ -54,7 +52,7 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
 
   private[this] val actorNameIndex = Iterator from 0
 
-  private[this] var statusListeners: Set[ActorRef] = Set(commander)
+  private[this] var statusListeners: Set[ActorRef] = Set.empty
 
   private[this] var currentStatus: ClusterStatusEvent = ClusterDisconnected
 
@@ -96,25 +94,17 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
       pools.values.foreach(_ ! Reconnect)
       updateStatus(ClusterConnected)
 
-      //Leave this commented out for now - this doesn't work when the cluster connector is created
-      //externally and handed off (for example, the way Session does it)
-      //this means we can theoretically 'leak' cluster connections, but it doesn't really happen in practice.
-      //what we want is a way for a client to relinquish being the commander and hand it off to somebody else.
-//    case Terminated(`commander`) =>
-//      log.warning("Cluster commander unexpextedly terminated. Shutting down as well.")
-//      context.become(closing(Athena.Abort, statusListeners))
-
     case Terminated(listener) if statusListeners.contains(listener) =>
+      context.unwatch(listener)
       statusListeners = statusListeners - listener
+      //TODO: Stop self upon termination of our final listener
 
-    case AddClusterStatusListener =>
-      val listener = sender()
+    case AddClusterStatusListener(listener) =>
       listener ! currentStatus
       context.watch(listener)
       statusListeners = statusListeners + listener
 
-    case RemoveClusterStatusListener =>
-      val listener = sender()
+    case RemoveClusterStatusListener(listener) =>
       context.unwatch(listener)
       statusListeners = statusListeners - listener
 
@@ -125,7 +115,7 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
   }
 
   override def postStop(): Unit = {
-    log.info("Cluster connector to {} shutting down.", clusterMetadata.name.getOrElse("Unknown"))
+    log.info("Cluster connector to {} successfully shut down.", clusterMetadata.name.getOrElse("Unknown"))
   }
 
   def receive = starting()
@@ -169,7 +159,7 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
         //this is a fatal error - we cannot do anything with this
         updateStatus(ClusterFailed(error))
         //now shut down
-        context.become(closing(Athena.Abort, Set(commander)))
+        context.become(closing(Athena.Abort, Set.empty))
 
     }
 
@@ -243,7 +233,7 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
     liveHosts = IndexedSeq.empty
     pools = Map.empty
 
-    step(closeActors, commanders)
+    step(closeActors, commanders ++ statusListeners)
   }
 
   //called in reaction to a pool signalling that it's available
@@ -339,8 +329,8 @@ private[athena] class ClusterConnector(commander: ActorRef, setup: ClusterConnec
 
 private[athena] object ClusterConnector {
 
-  def props(commander: ActorRef, setup: ClusterConnectorSetup): Props = {
-    Props(new ClusterConnector(commander, setup))
+  def props(setup: ClusterConnectorSetup): Props = {
+    Props(new ClusterConnector(setup))
   }
 
   /**
