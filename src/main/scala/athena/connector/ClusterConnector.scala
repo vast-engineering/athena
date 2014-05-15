@@ -352,17 +352,24 @@ private[athena] object ClusterConnector {
 
     var errors: Map[InetAddress, AthenaResponse] = Map.empty
 
-    timeout match {
+    val timeoutJob = timeout match {
       case t: FiniteDuration =>
-        context.system.scheduler.scheduleOnce(t) {
+        val j = context.system.scheduler.scheduleOnce(t) {
           self ! QueryTimeoutExceeded
         }
+        Some(j)
       case _ =>
         log.debug("Using infinite timeout for request.")
+        None
     }
 
     override def preStart() {
       attemptRequest(originalRequest)
+    }
+
+
+    override def postStop() {
+      timeoutJob.foreach(_.cancel())
     }
 
     def sendResponse(r: Any) {
@@ -384,7 +391,7 @@ private[athena] object ClusterConnector {
         context.become {
 
           case QueryTimeoutExceeded =>
-            log.warning("Query timeout exceeded.", host.addr)
+            log.warning("Query timeout exceeded - host: {}", host.addr)
             sendResponse(Timedout(originalRequest))
 
           case x if sender() != host.connection =>
