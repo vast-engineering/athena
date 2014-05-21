@@ -53,7 +53,7 @@ class ConnectionActorSpec extends WordSpec with AthenaTest with Matchers {
           val responseMessage = expectMsgPF() {
             case ConnectionCommandFailed(_, Some(InvalidError(message))) => message
           }
-          log.debug("Got response - {}", responseMessage)
+          testLogger.debug("Got response - {}", responseMessage)
         }
       }
 
@@ -64,7 +64,7 @@ class ConnectionActorSpec extends WordSpec with AthenaTest with Matchers {
           val responseMessage = expectMsgPF() {
             case ErrorResponse(_, SyntaxError(message)) => message
           }
-          log.debug("Got response - {}", responseMessage)
+          testLogger.debug("Got response - {}", responseMessage)
         }
       }
     }

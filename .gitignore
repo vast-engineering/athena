@@ -8,5 +8,5 @@
 .cache
 .settings
 
-target
+target/
 worksheets

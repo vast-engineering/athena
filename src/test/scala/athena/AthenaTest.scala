@@ -5,15 +5,13 @@ import com.typesafe.config.{ConfigFactory, Config}
 import akka.actor.{ActorRef, ActorSystem}
 import scala.concurrent.{ExecutionContext, Await, Future}
 import org.scalatest.{BeforeAndAfterAll, Suite}
-import akka.event.Logging
 import akka.io.IO
 import java.net.{InetSocketAddress, InetAddress}
-import athena.testutils.{ProcessManager, LineHandler, CassandraManager}
-import scala.util.control.NonFatal
-import java.util.concurrent.TimeUnit
+import org.slf4j.LoggerFactory
+import akka.event.Logging
 
 trait TestLogging { self: TestKitBase =>
-  val log = Logging(system, self.getClass)
+  val testLogger = Logging(system, self.getClass)
 }
 
 trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender with BeforeAndAfterAll with TestLogging {
@@ -28,110 +26,85 @@ trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender wit
 
   import collection.JavaConversions._
 
-  private[this] var cassandraProcess: Option[ProcessManager] = None
-
-  override protected def beforeAll() {
-    val cassandraManager = new CassandraManager()
-      .withVersion("2.0.7")
-      .withInstanceName(".farsandra-test")
-      .withCleanInstanceOnStart(true)
-      .withCreateConfigurationFiles(true)
-      .withHost("localhost")
-      .withSeeds(Seq("localhost"))
-      .withOutputHandler(new LineHandler {
-        override def handleLine(line: String) {
-          log.debug(s"Cassandra out - $line")
-        }
-      })
-      .withErrorHandler(new LineHandler {
-        override def handleLine(line: String) {
-          log.error(s"Cassandra err - $line")
-        }
-      })
-
-
-    if(config.getBoolean("athena.test.start-cassandra")) {
-      cassandraProcess = Some(cassandraManager.start())
-    }
-
-    if(config.getBoolean("athena.test.create-keyspace")) {
-      val queryExecutor = cassandraManager.executeCQL("/schema.cql")
-      if(queryExecutor.waitForShutdown(5000) != 0) {
-        throw new RuntimeException("Could not execute CQL!")
-      }
-    }
-  }
-
-  override protected def afterAll() {
-    cassandraProcess.foreach { cp =>
-      if(cp.destroyAndWaitForShutdown(5000) != 0) {
-        throw new RuntimeException("Could not stop cassandra!")
-      }
-    }
-    shutdown(system, verifySystemShutdown = true)
-  }
-
   protected def await[T](f: Future[T]): T = Await.result(f, timeout.duration)
 
   import scala.concurrent.duration._
   import scala.language.postfixOps
 
   protected val hosts: Set[InetAddress] = config.getStringList("athena.test.hosts").map(InetAddress.getByName)(collection.breakOut)
-  protected val port = 9042
+  protected val port = config.getInt("athena.test.port")
 
-  protected def withClusterConnection[A]()(f: ActorRef => A): A = {
-    val probe = TestProbe()
-    val connector = {
-      IO(Athena).tell(Athena.ClusterConnectorSetup(hosts, port, None), probe.ref)
-      probe.expectMsgType[Athena.ClusterConnectorInfo]
-      probe.fishForMessage() {
-        case Athena.ClusterConnected => true
-        case x: Athena.ClusterStatusEvent => false
-      }
-      probe.lastSender
-    }
+  override protected def afterAll() {
+    shutdown(system, verifySystemShutdown = true)
+  }
 
+  protected def withKeyspace[A](ksName: String)(f: => A): A = {
+    //TODO: Add bits that create and drop a keyspace
     try {
-      f(connector)
+      f
     } finally {
-      connector ! Athena.Close
-      within(10 seconds) { expectMsgType[Athena.ConnectionClosed] }
     }
   }
 
-  protected def withNodeConnection[A]()(f: ActorRef => A): A = {
-    val connector = {
-      IO(Athena) ! Athena.NodeConnectorSetup(hosts.head.getHostName, port, None)
-      expectMsgType[Athena.NodeConnectorInfo].nodeConnector
-      expectMsgType[Athena.NodeConnected]
-      lastSender
-    }
+  protected def withClusterConnection[A](ksName: String = "testks")(f: ActorRef => A): A = {
+    withKeyspace(ksName) {
+      val probe = TestProbe()
+      val connector = {
+        IO(Athena).tell(Athena.ClusterConnectorSetup(hosts, port, None), probe.ref)
+        probe.expectMsgType[Athena.ClusterConnectorInfo]
+        probe.fishForMessage() {
+          case Athena.ClusterConnected => true
+          case x: Athena.ClusterStatusEvent => false
+        }
+        probe.lastSender
+      }
 
-    try {
-      f(connector)
-    } finally {
-      connector ! Athena.Close
-      within(10 seconds) { expectMsgType[Athena.ConnectionClosed] }
+      try {
+        f(connector)
+      } finally {
+        connector ! Athena.Close
+        within(10 seconds) { expectMsgType[Athena.ConnectionClosed] }
+      }
+    }
+  }
+
+  protected def withNodeConnection[A](ksName: String = "testks")(f: ActorRef => A): A = {
+    withKeyspace(ksName) {
+      val connector = {
+        IO(Athena) ! Athena.NodeConnectorSetup(hosts.head.getHostName, port, None)
+        expectMsgType[Athena.NodeConnectorInfo].nodeConnector
+        expectMsgType[Athena.NodeConnected]
+        lastSender
+      }
+
+      try {
+        f(connector)
+      } finally {
+        connector ! Athena.Close
+        within(10 seconds) {
+          expectMsgType[Athena.ConnectionClosed]
+        }
+      }
     }
   }
 
   protected def withConnection[A](keyspace: Option[String] = None)(f: ActorRef => A): A = {
-    val probe = TestProbe()
-    val connector = {
-      IO(Athena).tell(Athena.Connect(new InetSocketAddress(hosts.head.getHostName, port), initialKeyspace = keyspace), probe.ref)
-      probe.expectMsgType[Athena.Connected]
-      val connection = probe.lastSender
-      connection ! Athena.Register(self)
-      connection
+    withKeyspace(keyspace.getOrElse("testks")) {
+      val probe = TestProbe()
+      val connector = {
+        IO(Athena).tell(Athena.Connect(new InetSocketAddress(hosts.head.getHostName, port), initialKeyspace = keyspace), probe.ref)
+        probe.expectMsgType[Athena.Connected]
+        val connection = probe.lastSender
+        connection ! Athena.Register(self)
+        connection
+      }
+      try {
+        f(connector)
+      } finally {
+        connector ! Athena.Close
+        within(10 seconds) { expectMsgType[Athena.ConnectionClosed] }
+      }
     }
-    try {
-      f(connector)
-    } finally {
-      connector ! Athena.Close
-      within(10 seconds) { expectMsgType[Athena.ConnectionClosed] }
-    }
-
   }
-
 
 }

@@ -13,16 +13,18 @@ class SessionSpec extends WordSpec with AthenaTest with Matchers {
 
   "A Session" should {
     "execute a query" in {
-      val session = Session(hosts, port, "testks")
+      withKeyspace("testks") {
+        val session = Session(hosts, port, "testks")
 
-      try {
-        val aggregateRows = Await.result(session.execute("select * from users"), Duration(10, TimeUnit.SECONDS))
-        assert(!aggregateRows.isEmpty)
+        try {
+          val aggregateRows = Await.result(session.execute("select * from users"), Duration(10, TimeUnit.SECONDS))
+          assert(!aggregateRows.isEmpty)
 
-        val rows = Await.result(session.executeStream("select * from users") |>>> Iteratee.getChunks, Duration(10, TimeUnit.SECONDS))
-        assert(!rows.isEmpty)
-      } finally {
-        session.close()
+          val rows = Await.result(session.executeStream("select * from users") |>>> Iteratee.getChunks, Duration(10, TimeUnit.SECONDS))
+          assert(!rows.isEmpty)
+        } finally {
+          session.close()
+        }
       }
     }
 

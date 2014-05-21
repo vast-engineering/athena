@@ -46,9 +46,9 @@ class PipelineSpec extends WordSpec with AthenaTest with Matchers {
 
   private def simpleQuery(pipeline: Statement => Enumerator[Row]) {
     val results = Await.result(pipeline(SimpleStatement("select * from users", keyspace = Some("testks"))).run(Iteratee.getChunks), timeoutDuration)
-    log.debug("Query results - ")
+    testLogger.debug("Query results - ")
     results.foreach { row =>
-        log.debug(s"${row.values.mkString(", ")}")
+      testLogger.debug(s"${row.values.mkString(", ")}")
     }
     assert(!results.isEmpty)
   }

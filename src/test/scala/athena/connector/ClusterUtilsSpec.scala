@@ -11,11 +11,15 @@ import scala.Some
 import java.util.concurrent.TimeUnit
 import akka.util.Timeout
 import scala.concurrent.Await
+import akka.event.{Logging, LoggingAdapter}
 
 class ClusterUtilsSpec extends WordSpec with AthenaTest with Matchers with ClusterUtils {
 
   private[this] val timeoutDuration: FiniteDuration = Duration(10, TimeUnit.SECONDS)
   private[this] implicit val timeout = Timeout(timeoutDuration)
+
+
+  override def log: LoggingAdapter = Logging(system, this.getClass)
 
   val host = hosts.head
 

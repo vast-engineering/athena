@@ -15,19 +15,20 @@ class InterpTest extends WordSpec with AthenaTest {
   case class TestRes(a: String, b: String)
 
   "A query literal" should {
-
     "work properly" in {
-      implicit val session = Session(hosts, port, "testks")
-      log.info("Starting query.")
+      withKeyspace("testks") {
+        implicit val session = Session(hosts, port, "testks")
+        testLogger.info("Starting query.")
 
-      val id = 1234
-      val rowMapper = Iteratee.getChunks[CvResult[(Long, String, String)]].map { result =>
-        result.map(_.get)
+        val id = 1234
+        val rowMapper = Iteratee.getChunks[CvResult[(Long, String, String)]].map { result =>
+          result.map(_.get)
+        }
+        val foo = await(cql"select id, first_name, last_name from users where id = $id".as[(Long, String, String)].execute.run(rowMapper))
+
+        testLogger.info("Finished query with result {}", foo)
+        session.close()
       }
-      val foo = await(cql"select id, first_name, last_name from users where id = $id".as[(Long, String, String)].execute.run(rowMapper))
-
-      log.info("Finished query with result {}", foo)
-      session.close()
     }
   }
 

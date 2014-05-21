@@ -28,11 +28,11 @@ class ClusterConnectorSpec extends WordSpec with AthenaTest with Matchers {
         val columnDefs = rows.columnDefs
 
         rows.data.foreach { row =>
-          log.debug("Row - ")
+          testLogger.debug("Row - ")
           row.zip(columnDefs).foreach { zipped =>
             val columnDef = zipped._2
             val value = CValue.parse(columnDef.dataType, zipped._1)
-            log.debug(s"   ${columnDef.name} - ${columnDef.dataType.name} - $value")
+            testLogger.debug(s"   ${columnDef.name} - ${columnDef.dataType.name} - $value")
           }
         }
       }
@@ -47,11 +47,11 @@ class ClusterConnectorSpec extends WordSpec with AthenaTest with Matchers {
         val columnDefs = rows.columnDefs
 
         rows.data.foreach { row =>
-          log.debug("Row - ")
+          testLogger.debug("Row - ")
           row.zip(columnDefs).foreach { zipped =>
             val columnDef = zipped._2
             val value = CValue.parse(columnDef.dataType, zipped._1)
-            log.debug(s"   ${columnDef.name} - ${columnDef.dataType.name} - $value")
+            testLogger.debug(s"   ${columnDef.name} - ${columnDef.dataType.name} - $value")
           }
         }
       }
