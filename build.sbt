@@ -16,7 +16,7 @@ resolvers += "Typesafe Repository" at "http://repo.typesafe.com/typesafe/release
 
 resolvers += "spray repo" at "http://repo.spray.io"
 
-def akka(artifact: String) = "com.typesafe.akka" %% ("akka-" + artifact) % "2.3.2"
+def akka(artifact: String) = "com.typesafe.akka" %% ("akka-" + artifact) % "2.3.3"
 
 libraryDependencies ++= Seq(
   "org.slf4j" % "slf4j-api" % "1.7.7",
