@@ -659,7 +659,7 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
     }
 
     checkForUseQuery.filter(_.trim.toUpperCase.startsWith("USE")).map { _ =>
-      log.error("USE queries are explicitly disallowed.")
+      log.warning("USE queries are explicitly disallowed.")
       Responses.ErrorResponse(request, Errors.SyntaxError("USE queries are not allowed. Please specify the keyspace on the statement request."))
     } orElse {
       //check for a compatible keyspace

@@ -30,7 +30,7 @@ object pipelining {
       connection.ask(request).map {
 
         case ErrorResponse(_, error) =>
-          log.error("Error with request {}, error={}", request, error)
+          log.debug("Error with request {}, error={}", request, error)
           throw error.toThrowable
 
         case NoHostsAvailable(_, errors) =>

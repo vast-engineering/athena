@@ -1,18 +1,14 @@
 package athena.connector
 
-import akka.actor.ActorRef
-import org.scalatest.{WordSpec, Matchers}
-import athena.{AthenaTest, Athena}
-import akka.io.IO
+import org.scalatest.{WordSpecLike, Matchers}
+import athena.AthenaTest
 import athena.Requests.SimpleStatement
 import athena.Responses.Rows
-import athena.data.CValue
 
-import scala.concurrent.duration._
 import scala.language.postfixOps
 
 
-class ClusterConnectorSpec extends WordSpec with AthenaTest with Matchers {
+class ClusterConnectorSpec extends AthenaTest with WordSpecLike with Matchers {
 
   "A Cluster connector" should {
     "start up properly" in {
@@ -26,15 +22,7 @@ class ClusterConnectorSpec extends WordSpec with AthenaTest with Matchers {
         connector ! request
         val rows = expectMsgType[Rows]
         val columnDefs = rows.columnDefs
-
-        rows.data.foreach { row =>
-          testLogger.debug("Row - ")
-          row.zip(columnDefs).foreach { zipped =>
-            val columnDef = zipped._2
-            val value = CValue.parse(columnDef.dataType, zipped._1)
-            testLogger.debug(s"   ${columnDef.name} - ${columnDef.dataType.name} - $value")
-          }
-        }
+        assert(rows.data.size === 3)
       }
     }
 
@@ -45,15 +33,7 @@ class ClusterConnectorSpec extends WordSpec with AthenaTest with Matchers {
         connector ! request
         val rows = expectMsgType[Rows]
         val columnDefs = rows.columnDefs
-
-        rows.data.foreach { row =>
-          testLogger.debug("Row - ")
-          row.zip(columnDefs).foreach { zipped =>
-            val columnDef = zipped._2
-            val value = CValue.parse(columnDef.dataType, zipped._1)
-            testLogger.debug(s"   ${columnDef.name} - ${columnDef.dataType.name} - $value")
-          }
-        }
+        assert(rows.data.size === 3)
       }
     }
 

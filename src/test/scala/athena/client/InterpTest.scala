@@ -1,13 +1,11 @@
 package athena.client
 
-import org.scalatest.WordSpec
-import play.api.libs.iteratee.Iteratee
-import scala.concurrent.Await
-import scala.concurrent.duration.Duration
+import org.scalatest.WordSpecLike
 import athena.AthenaTest
+import play.api.libs.iteratee.Iteratee
 import athena.data.CvResult
 
-class InterpTest extends WordSpec with AthenaTest {
+class InterpTest extends AthenaTest with WordSpecLike {
 
   import QueryInterpolation._
   import RowReader._
@@ -18,7 +16,6 @@ class InterpTest extends WordSpec with AthenaTest {
     "work properly" in {
       withKeyspace("testks") {
         implicit val session = Session(hosts, port, "testks")
-        testLogger.info("Starting query.")
 
         val id = 1234
         val rowMapper = Iteratee.getChunks[CvResult[(Long, String, String)]].map { result =>
@@ -26,7 +23,6 @@ class InterpTest extends WordSpec with AthenaTest {
         }
         val foo = await(cql"select id, first_name, last_name from users where id = $id".as[(Long, String, String)].execute.run(rowMapper))
 
-        testLogger.info("Finished query with result {}", foo)
         session.close()
       }
     }

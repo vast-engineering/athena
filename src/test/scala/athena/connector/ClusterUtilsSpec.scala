@@ -1,25 +1,20 @@
 package athena.connector
 
-import akka.testkit._
-import akka.actor.ActorSystem
-import org.scalatest.{WordSpec, BeforeAndAfterAll, Matchers, WordSpecLike}
-import athena.{AthenaTest, Athena}
+import org.scalatest.{Matchers, WordSpecLike}
+import athena.AthenaTest
 import scala.concurrent.duration._
-import akka.io.IO
 import athena.client.pipelining
-import scala.Some
 import java.util.concurrent.TimeUnit
 import akka.util.Timeout
 import scala.concurrent.Await
 import akka.event.{Logging, LoggingAdapter}
 
-class ClusterUtilsSpec extends WordSpec with AthenaTest with Matchers with ClusterUtils {
+class ClusterUtilsSpec extends AthenaTest with WordSpecLike with Matchers with ClusterUtils {
 
   private[this] val timeoutDuration: FiniteDuration = Duration(10, TimeUnit.SECONDS)
   private[this] implicit val timeout = Timeout(timeoutDuration)
 
-
-  override def log: LoggingAdapter = Logging(system, this.getClass)
+  override lazy val log: LoggingAdapter = Logging(system, this.getClass)
 
   val host = hosts.head
 

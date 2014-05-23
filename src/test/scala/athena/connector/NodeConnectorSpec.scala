@@ -1,20 +1,15 @@
 package athena.connector
 
-import akka.testkit.{ImplicitSender, DefaultTimeout, TestKit}
-import akka.actor.{ActorRef, ActorSystem}
-import org.scalatest.{WordSpec, Matchers, WordSpecLike, BeforeAndAfterAll}
-import akka.io.IO
-
-import scala.concurrent.duration._
+import org.scalatest.{Matchers, WordSpecLike}
 import scala.language.postfixOps
 
 import athena.Requests.SimpleStatement
 import athena.Responses.Rows
-import athena.{AthenaTest, Athena}
+import athena.AthenaTest
 import athena.data.CValue
 
 
-class NodeConnectorSpec extends WordSpec with AthenaTest with Matchers {
+class NodeConnectorSpec extends AthenaTest with WordSpecLike with Matchers {
 
   val hostAddress = hosts.head.getHostAddress
 
@@ -32,11 +27,9 @@ class NodeConnectorSpec extends WordSpec with AthenaTest with Matchers {
         val columnDefs = rows.columnDefs
 
         rows.data.foreach { row =>
-          testLogger.debug("Row - ")
           row.zip(columnDefs).foreach { zipped =>
             val columnDef = zipped._2
             val value = CValue.parse(columnDef.dataType, zipped._1)
-            testLogger.debug(s"   ${columnDef.name} - ${columnDef.dataType.name} - $value")
           }
         }
       }
@@ -50,11 +43,9 @@ class NodeConnectorSpec extends WordSpec with AthenaTest with Matchers {
         val columnDefs = rows.columnDefs
 
         rows.data.foreach { row =>
-          testLogger.debug("Row - ")
           row.zip(columnDefs).foreach { zipped =>
             val columnDef = zipped._2
             val value = CValue.parse(columnDef.dataType, zipped._1)
-            testLogger.debug(s"   ${columnDef.name} - ${columnDef.dataType.name} - $value")
           }
         }
       }

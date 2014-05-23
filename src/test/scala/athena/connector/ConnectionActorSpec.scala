@@ -1,6 +1,6 @@
 package athena.connector
 
-import org.scalatest.{WordSpec, Matchers, WordSpecLike, BeforeAndAfterAll}
+import org.scalatest.{Matchers, WordSpecLike}
 
 import scala.concurrent.duration._
 
@@ -13,7 +13,7 @@ import athena.connector.ConnectionActor.{ConnectionCommandFailed, SetKeyspace}
 import athena.Errors.{SyntaxError, InvalidError}
 
 
-class ConnectionActorSpec extends WordSpec with AthenaTest with Matchers {
+class ConnectionActorSpec extends AthenaTest with WordSpecLike with Matchers {
 
   "A ConnectionActor" when {
     "uninitialized" should {
@@ -53,7 +53,6 @@ class ConnectionActorSpec extends WordSpec with AthenaTest with Matchers {
           val responseMessage = expectMsgPF() {
             case ConnectionCommandFailed(_, Some(InvalidError(message))) => message
           }
-          testLogger.debug("Got response - {}", responseMessage)
         }
       }
 
@@ -64,7 +63,6 @@ class ConnectionActorSpec extends WordSpec with AthenaTest with Matchers {
           val responseMessage = expectMsgPF() {
             case ErrorResponse(_, SyntaxError(message)) => message
           }
-          testLogger.debug("Got response - {}", responseMessage)
         }
       }
     }

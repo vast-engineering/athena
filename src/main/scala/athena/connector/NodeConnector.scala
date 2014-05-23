@@ -483,11 +483,11 @@ private[athena] class NodeConnector(commander: ActorRef,
             KeyspaceAttemptFailed(connection, Athena.InternalError("Keyspace operation failed."))
 
           case ConnectionCommandFailed(_, Some(error)) =>
-            log.error("Could not set keyspace {} due to error - {}", keyspace, error)
+            log.debug("Could not set keyspace {} due to error - {}", keyspace, error)
             KeyspaceAttemptFailed(connection, error)
 
           case ConnectionCommandFailed(_, None) =>
-            log.error("Could not set keyspace {}", keyspace)
+            log.debug("Could not set keyspace {}", keyspace)
             KeyspaceAttemptFailed(connection, Athena.InternalError("Keyspace operation failed."))
 
           case keyspaceResponse =>
@@ -496,7 +496,7 @@ private[athena] class NodeConnector(commander: ActorRef,
 
         } recover {
           case NonFatal(t) =>
-            log.error("Could not set keyspace due to failure - {}", t)
+            log.debug("Could not set keyspace due to failure - {}", t)
             KeyspaceAttemptFailed(connection, Athena.GeneralError("Keyspace operation failed."))
         } pipeTo self
 

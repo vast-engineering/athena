@@ -1,15 +1,14 @@
 package athena.client
 
-import org.scalatest.{WordSpec, Matchers}
+import org.scalatest.{Matchers, WordSpecLike}
+import athena.AthenaTest
 import play.api.libs.iteratee.Iteratee
 import scala.concurrent.{Await, Future}
 import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.Duration
-import athena.AthenaTest
-import athena.data.CValue
 import athena.Athena.AthenaException
 
-class SessionSpec extends WordSpec with AthenaTest with Matchers {
+class SessionSpec extends AthenaTest with WordSpecLike with Matchers {
 
   "A Session" should {
     "execute a query" in {

@@ -1,24 +1,17 @@
 package athena
 
-import akka.testkit.{TestProbe, ImplicitSender, DefaultTimeout, TestKitBase}
-import com.typesafe.config.{ConfigFactory, Config}
+import akka.testkit._
 import akka.actor.{ActorRef, ActorSystem}
 import scala.concurrent.{ExecutionContext, Await, Future}
 import org.scalatest.{BeforeAndAfterAll, Suite}
 import akka.io.IO
 import java.net.{InetSocketAddress, InetAddress}
-import org.slf4j.LoggerFactory
-import akka.event.Logging
 
-trait TestLogging { self: TestKitBase =>
-  val testLogger = Logging(system, self.getClass)
-}
+abstract class AthenaTest(_system: ActorSystem) extends TestKit(_system)
+  with Suite with DefaultTimeout with ImplicitSender with BeforeAndAfterAll {
 
-trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender with BeforeAndAfterAll with TestLogging {
-  thisSuite: Suite =>
+  def this() = this(ActorSystem("test-system"))
 
-  lazy val config: Config = ConfigFactory.load()
-  implicit lazy val system: ActorSystem = ActorSystem("test-system", config)
   implicit lazy val ec: ExecutionContext = system.dispatcher
 
   //ensure the actor actorRefFactory is shut down no matter what
@@ -31,8 +24,8 @@ trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender wit
   import scala.concurrent.duration._
   import scala.language.postfixOps
 
-  protected val hosts: Set[InetAddress] = config.getStringList("athena.test.hosts").map(InetAddress.getByName)(collection.breakOut)
-  protected val port = config.getInt("athena.test.port")
+  protected val hosts: Set[InetAddress] = system.settings.config.getStringList("athena.test.hosts").map(InetAddress.getByName)(collection.breakOut)
+  protected val port = system.settings.config.getInt("athena.test.port")
 
   override protected def afterAll() {
     shutdown(system, verifySystemShutdown = true)
@@ -50,7 +43,7 @@ trait AthenaTest extends TestKitBase with DefaultTimeout with ImplicitSender wit
     withKeyspace(ksName) {
       val probe = TestProbe()
       val connector = {
-        IO(Athena).tell(Athena.ClusterConnectorSetup(hosts, port, None), probe.ref)
+        IO(Athena).tell(Athena.ClusterConnectorSetup(hosts, port, None, useExisting = false), probe.ref)
         probe.expectMsgType[Athena.ClusterConnectorInfo]
         probe.fishForMessage() {
           case Athena.ClusterConnected => true
