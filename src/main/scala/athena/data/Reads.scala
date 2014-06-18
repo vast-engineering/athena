@@ -8,11 +8,8 @@ import org.joda.time.DateTime
 import java.util.{UUID, Date}
 import java.net.InetAddress
 
-import play.api.libs.json.{Reads => JsonReads, _}
+import play.api.libs.json.{Json, Reads => JsonReads, JsResult, JsError, JsSuccess, JsValue}
 import com.fasterxml.jackson.core.JsonParseException
-import scala.reflect.ClassTag
-import play.api.libs.json.JsSuccess
-import scala.Some
 
 /**
  * A trait that defines a class that can convert from a type A value to another type B.
@@ -67,12 +64,16 @@ trait Reads[A] {
 
 }
 
-object Reads extends DefaultReads {
+object Reads extends DefaultReads with LowPriorityReads {
   def of[A](implicit ra: Reads[A]): Reads[A] = ra
 
   def apply[A](f: CValue => CvResult[A]): Reads[A] = new Reads[A] {
     override def read(cvalue: CValue): CvResult[A] = f(cvalue)
   }
+
+}
+
+trait LowPriorityReads {
 
   def fromJsResult[A](r: JsResult[A]): CvResult[A] = r match {
     case JsSuccess(obj, _) => CvSuccess(obj)
@@ -82,6 +83,7 @@ object Reads extends DefaultReads {
       }
       CvError(cErrors)
   }
+
 
   def jsonReads[T](implicit jsValueReader: Reads[JsValue], jsReader: JsonReads[T]): Reads[T] = Reads[T] { cvalue =>
     cvalue.validate[JsValue].flatMap { jsValue =>
