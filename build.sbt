@@ -42,5 +42,6 @@ libraryDependencies <++= scalaBinaryVersion { scalaBinV =>
   )
 }
 
+releaseSettings
 
 
