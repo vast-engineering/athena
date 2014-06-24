@@ -25,8 +25,8 @@ def sprayDeps(scalaBinV: String): String => ModuleID = scalaBinV match {
     artifact => "io.spray" % artifact % "1.3.1"
 }
 
-libraryDependencies <++= scalaBinaryVersion { scalaBinV =>
-  val spray = sprayDeps(scalaBinV)
+libraryDependencies ++= {
+  val spray = sprayDeps(scalaBinaryVersion.value)
   Seq(
     akka("actor"),
     spray("spray-util"),
@@ -44,4 +44,4 @@ libraryDependencies <++= scalaBinaryVersion { scalaBinV =>
 
 releaseSettings
 
-
+CassandraUtils.cassandraTestSettings

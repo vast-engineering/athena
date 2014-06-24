@@ -1,5 +1,5 @@
 libraryDependencies ++= Seq(
-  "org.cassandraunit" % "cassandra-unit" % "2.0.2.1"
+  "org.apache.commons" % "commons-compress" % "1.8.1"
 )
 
 addSbtPlugin("com.github.gseitz" % "sbt-release" % "0.8.3")
