@@ -7,9 +7,9 @@
         </encoder>
     </appender>
 
-    <logger name="athena" level="WARN"/>
+    <logger name="athena" level="INFO"/>
 
-    <root level="ERROR">
+    <root level="WARN">
         <appender-ref ref="STDOUT"/>
     </root>
 

@@ -6,8 +6,6 @@ scalaVersion := "2.10.4"
 
 crossScalaVersions := Seq("2.10.4", "2.11.1")
 
-scalacOptions += "-target:jvm-1.7"
-
 licenses += "Apache License, Version 2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")
 
 description := "A fully nonblocking and asynchronous client library for Cassandra."
@@ -18,30 +16,25 @@ resolvers += "spray repo" at "http://repo.spray.io"
 
 def akka(artifact: String) = "com.typesafe.akka" %% ("akka-" + artifact) % "2.3.3"
 
-def sprayDeps(scalaBinV: String): String => ModuleID = scalaBinV match {
-  case "2.11" =>
-    artifact => "io.spray" %% artifact % "1.3.1-20140423"
-  case _ =>
-    artifact => "io.spray" % artifact % "1.3.1"
-}
+def spray(artifact: String) = "io.spray" %% artifact % "1.3.1"
 
-libraryDependencies ++= {
-  val spray = sprayDeps(scalaBinaryVersion.value)
-  Seq(
-    akka("actor"),
-    spray("spray-util"),
-    "com.typesafe.play" %% "play-json" % "2.3.0",
-    "com.typesafe.play" %% "play-iteratees" % "2.3.0",
-    "com.typesafe" % "config" % "1.2.1",
-    "commons-lang" % "commons-lang" % "2.6",
-    "com.chuusai" %% "shapeless" % "1.2.4",
-    "org.scalatest" %% "scalatest" % "2.2.0" % "test",
-    "ch.qos.logback" % "logback-classic" % "1.1.2" % "test",
-    akka("slf4j") % "test",
-    akka("testkit") % "test"
-  )
-}
+libraryDependencies ++= Seq(
+  akka("actor"),
+  spray("spray-util"),
+  "com.typesafe.play" %% "play-json" % "2.3.1",
+  "com.typesafe.play" %% "play-iteratees" % "2.3.1",
+  "com.typesafe" % "config" % "1.2.1",
+  "commons-lang" % "commons-lang" % "2.6",
+  "com.chuusai" %% "shapeless" % "1.2.4",
+  "org.scalatest" %% "scalatest" % "2.2.0" % "test",
+  "ch.qos.logback" % "logback-classic" % "1.1.2" % "test",
+  akka("slf4j") % "test",
+  akka("testkit") % "test"
+)
+
 
 releaseSettings
 
 CassandraUtils.cassandraTestSettings
+
+aetherPublishSettings
