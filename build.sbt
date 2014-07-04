@@ -36,3 +36,5 @@ libraryDependencies ++= Seq(
 releaseSettings
 
 CassandraUtils.cassandraTestSettings
+
+SonatypePublish.sonatypePublishSettings
