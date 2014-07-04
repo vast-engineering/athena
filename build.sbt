@@ -14,7 +14,7 @@ resolvers += Resolver.typesafeRepo("releases")
 
 resolvers += "spray repo" at "http://repo.spray.io"
 
-def akka(artifact: String) = "com.typesafe.akka" %% ("akka-" + artifact) % "2.3.3"
+def akka(artifact: String) = "com.typesafe.akka" %% ("akka-" + artifact) % "2.3.4"
 
 def spray(artifact: String) = "io.spray" %% artifact % "1.3.1"
 
@@ -36,5 +36,3 @@ libraryDependencies ++= Seq(
 releaseSettings
 
 CassandraUtils.cassandraTestSettings
-
-aetherPublishSettings
