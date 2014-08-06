@@ -52,10 +52,10 @@ private[athena] class AthenaManager(globalSettings: AthenaExt#Settings) extends 
   }
 
   private def clusterConnectorFor(normalizedSetup: ClusterConnectorSetup): ActorRef = {
-    def createConnector(): ActorRef = {
+    def createConnector: ActorRef = {
       log.debug("Creating new cluster connector for {}", normalizedSetup)
       context.actorOf(
-        props = ClusterConnector.props(normalizedSetup),
+        props = ClusterConnector.props(normalizedSetup.initialHosts, normalizedSetup.port, normalizedSetup.settings.get, normalizedSetup.failOnInit),
         name = "cluster-connector-" + clusterConnectorCounter.next()
       )
     }
@@ -68,7 +68,7 @@ private[athena] class AthenaManager(globalSettings: AthenaExt#Settings) extends 
       connectors.getOrElse(normalizedSetup, createAndRegisterHostConnector())
     } else {
       //create a brand new connector
-      createConnector()
+      createConnector
     }
   }
 

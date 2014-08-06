@@ -1,6 +1,6 @@
 package athena.connector
 
-import athena.{Requests, Errors, Responses, Athena}
+import athena._
 import akka.actor._
 import athena.Requests.AthenaRequest
 import athena.Responses._
@@ -10,7 +10,6 @@ import java.net.{InetSocketAddress, InetAddress}
 import athena.connector.ClusterMonitorActor.{ClusterUnreachable, ClusterReconnected}
 import athena.Athena.NodeDisconnected
 import athena.Responses.RequestFailed
-import athena.Athena.ClusterConnectorSetup
 import athena.Athena.NodeConnected
 import athena.Athena.GeneralError
 import athena.Athena.ClusterFailed
@@ -24,18 +23,18 @@ import athena.data.PreparedStatementDef
 import akka.actor.Status.Failure
 import athena.util.MD5Hash
 
-private[athena] class ClusterConnector(setup: ClusterConnectorSetup) extends Actor with ActorLogging {
+class ClusterConnector(initialHosts: Set[InetAddress], port: Int,
+                                       settings: ClusterConnectorSettings,
+                                       failOnInit: Boolean = false) extends Actor with ActorLogging {
 
   import ClusterConnector._
 
   import context.dispatcher
 
-  private[this] val settings = setup.settings.get
-
   //create and sign a death pact with the monitor - we need it to operate
   private[this] val clusterMonitor = context.watch {
     context.actorOf(
-      props = Props(new ClusterMonitorActor(self, setup.initialHosts, setup.port, settings)),
+      props = Props(new ClusterMonitorActor(self, initialHosts, port, settings)),
       name = "cluster-monitor"
     )
   }
@@ -128,7 +127,7 @@ private[athena] class ClusterConnector(setup: ClusterConnectorSetup) extends Act
       case ClusterReconnected =>
         context.become(initializing)
 
-      case ClusterUnreachable if setup.failOnInit =>
+      case ClusterUnreachable if failOnInit =>
         updateStatus(ClusterFailed(GeneralError("Cluster is unreachable.")))
         context.stop(self) //boom
 
@@ -282,7 +281,7 @@ private[athena] class ClusterConnector(setup: ClusterConnectorSetup) extends Act
     //watch the pool actor, if it dies, so do we.
     val pool = context.watch {
       context.actorOf(
-        props = NodeConnector.props(self, new InetSocketAddress(host, setup.port), settings.localNodeSettings, preparedStatements),
+        props = NodeConnector.props(self, new InetSocketAddress(host, port), settings.localNodeSettings, preparedStatements),
         name = "node-connector-" + actorNameIndex.next()
       )
     }
@@ -327,10 +326,12 @@ private[athena] class ClusterConnector(setup: ClusterConnectorSetup) extends Act
 
 }
 
-private[athena] object ClusterConnector {
+object ClusterConnector {
 
-  def props(setup: ClusterConnectorSetup): Props = {
-    Props(new ClusterConnector(setup))
+  def props(initialHosts: Set[InetAddress], port: Int,
+            settings: ClusterConnectorSettings,
+            failOnInit: Boolean): Props = {
+    Props(new ClusterConnector(initialHosts, port, settings, failOnInit))
   }
 
   /**

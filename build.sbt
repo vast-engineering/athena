@@ -2,9 +2,9 @@ organization := "com.vast"
 
 name := "athena"
 
-scalaVersion := "2.10.4"
+scalaVersion := "2.11.2"
 
-crossScalaVersions := Seq("2.10.4", "2.11.1")
+crossScalaVersions := Seq("2.10.4", "2.11.2")
 
 licenses += "Apache License, Version 2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")
 
@@ -21,8 +21,8 @@ def spray(artifact: String) = "io.spray" %% artifact % "1.3.1"
 libraryDependencies ++= Seq(
   akka("actor"),
   spray("spray-util"),
-  "com.typesafe.play" %% "play-json" % "2.3.1",
-  "com.typesafe.play" %% "play-iteratees" % "2.3.1",
+  "com.typesafe.play" %% "play-json" % "2.3.2",
+  "com.typesafe.play" %% "play-iteratees" % "2.3.2",
   "com.typesafe" % "config" % "1.2.1",
   "commons-lang" % "commons-lang" % "2.6",
   "com.chuusai" %% "shapeless" % "1.2.4",

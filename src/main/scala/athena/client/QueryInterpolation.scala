@@ -1,6 +1,7 @@
 package athena.client
 
-import athena.data.{CvResult, CValue, Writes}
+import athena.Requests.BoundStatement
+import athena.data.{PreparedStatementDef, CvResult, CValue, Writes}
 import scala.annotation.implicitNotFound
 import play.api.libs.iteratee.{Iteratee, Enumeratee, Enumerator}
 import scala.concurrent.{ExecutionContext, Future}
@@ -57,6 +58,19 @@ object QueryInterpolation {
       StatementRunner.streamRunner(query, args)(rr)
     }
   }
+
+  implicit class PreparedStatementOps(val stmt: PreparedStatementDef) extends AnyVal {
+
+    //TODO: Add bits that allow for changing query params like consistency, etc.
+    // Probably need a more complex abstraction than this
+
+    def binder[A](implicit rw: RowWriter[A]): A => BoundStatement = { a =>
+      BoundStatement(stmt, rw.write(a))
+    }
+
+  }
+
+
 
 }
 
