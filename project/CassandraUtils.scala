@@ -38,7 +38,7 @@ object CassandraUtils {
       }
       (homeDir / ".cassandra-distrib").getAbsolutePath
     },
-    Keys.cassandraVersion := "2.0.5",
+    Keys.cassandraVersion := "2.0.9",
     Keys.instanceName := s"test-cassandra-${Keys.cassandraVersion.value}",
     Keys.host := "localhost",
     Keys.cqlProtocolPort := 9142,
@@ -98,7 +98,9 @@ object CassandraUtils {
       IO.createDirectory(instanceConf)
 
       val logDir = instanceBase / "log"
+      IO.createDirectory(logDir)
       val dataDir = instanceBase / "data"
+      IO.createDirectory(dataDir)
 
       val distributionConf = distributionHome / "conf"
 
@@ -137,7 +139,8 @@ object CassandraUtils {
 
     val started = new CountDownLatch(1)
     val logger = new ProcessLogger {
-      override def error(s: => String) {
+      override def error(s: => String): Unit = {
+//        log.error(s)
       }
 
       override def buffer[T](f: => T): T = {
@@ -146,6 +149,7 @@ object CassandraUtils {
 
       override def info(s: => String) {
         val line = s
+        //log.info(s)
         if(line.contains("Listening for thrift clients")) {
           started.countDown()
         }
@@ -164,7 +168,7 @@ object CassandraUtils {
     }
 
     try {
-      if(!started.await(15, TimeUnit.SECONDS)) {
+      if(!started.await(60, TimeUnit.SECONDS)) {
         throw new RuntimeException("Timed out waiting for cassandra to start.")
       }
       log.info("External cassandra demon started.")

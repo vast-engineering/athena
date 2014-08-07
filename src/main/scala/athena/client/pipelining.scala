@@ -19,13 +19,15 @@ object pipelining {
   type QueryPipeline = Statement => Enumerator[Row]
   type UpdatePipeline = Statement => Future[Seq[Row]]
 
+  import play.api.libs.iteratee.Execution.{defaultExecutionContext => dec}
+
   def pipeline(connection: Future[ActorRef])
-              (implicit log: LoggingContext, ec: ExecutionContext, timeout: Timeout): AthenaRequest => Future[AthenaResponse] = {
+              (implicit log: LoggingContext, ec: ExecutionContext, timeout: Timeout): Pipeline = {
     val pipeF = connection.map(pipeline)
     request => pipeF.flatMap(pipe => pipe(request))
   }
 
-  def pipeline(connection: ActorRef)(implicit log: LoggingContext, ec: ExecutionContext, timeout: Timeout): AthenaRequest => Future[AthenaResponse] = {
+  def pipeline(connection: ActorRef)(implicit log: LoggingContext, ec: ExecutionContext, timeout: Timeout): Pipeline = {
     request =>
       connection.ask(request).map {
 
@@ -54,7 +56,7 @@ object pipelining {
       }
   }
 
-  def queryPipeline(pipeline: Pipeline)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Future[Seq[Row]] = {
+  def queryPipeline(pipeline: Pipeline)(implicit ec: ExecutionContext): Statement => Future[Seq[Row]] = {
     stmt => {
       def collectRows(acc: mutable.Builder[Row, Seq[Row]], meta: Option[ResultSetMetadata], ps: Option[ByteString]): Future[Seq[Row]] = {
         getRows(pipeline, stmt, ps).flatMap { rowsOpt =>
@@ -89,10 +91,8 @@ object pipelining {
    * Create a new pipeline that has the ability to asynchronously execute a Statement and
    * return an Enumerator of the resulting rows.
    */
-  def streamingPipeline(pipeline: Pipeline)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Enumerator[Row] = {
-    val rowsEnum = rowsEnumerator(pipeline)
-
-    stmt => rowsEnum(stmt)
+  def streamingPipeline(pipeline: Pipeline): Statement => Enumerator[Row] = {
+    rowsEnumerator(pipeline)
   }
 
   def queryPipeline(connection: ActorRef)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Enumerator[Row] = {
@@ -102,7 +102,7 @@ object pipelining {
   private case class EnumeratorState(pageInfo: Option[ByteString] = None, metadata: Option[ResultSetMetadata] = None, beforeFirstPage: Boolean = true)
   private case class ResultPage(metadata: ResultSetMetadata, data: Seq[IndexedSeq[ByteString]])
 
-  private def rowsEnumerator(pipeline: Pipeline)(implicit ec: ExecutionContext, log: LoggingContext): Statement => Enumerator[Row] = {
+  private def rowsEnumerator(pipeline: Pipeline): Statement => Enumerator[Row] = {
     stmt =>
 
       Enumerator.unfoldM[EnumeratorState, ResultPage](EnumeratorState()) { state =>
@@ -119,18 +119,18 @@ object pipelining {
               val resultPage = ResultPage(pageMetadata, rows.data)
               (nextState, resultPage)
             }
-          }
+          }(dec)
         }
-      } through {
+      }(dec) through {
         //this bit transforms from an Enumerator[ResultPage] to an Enumerator[Row]
         Enumeratee.mapConcat[ResultPage] { page =>
           val meta = page.metadata
           page.data.map(data => Row(meta, data))
-        }
+        }(dec)
       } andThen Enumerator.eof
   }
 
-  private def getRows(pipeline: Pipeline, stmt: Statement, ps: Option[ByteString])(implicit ec: ExecutionContext, log: LoggingContext): Future[Option[Rows]] = {
+  private def getRows(pipeline: Pipeline, stmt: Statement, ps: Option[ByteString]): Future[Option[Rows]] = {
     val query = ps.map(FetchRows(stmt, _)).getOrElse(stmt)
     pipeline(query).map {
       case rows: Rows => Some(rows)
@@ -139,7 +139,7 @@ object pipelining {
         None
       case x =>
         throw new InternalException(s"Expected Rows back from a query, got $x instead.")
-    }
+    }(dec)
   }
 
 
