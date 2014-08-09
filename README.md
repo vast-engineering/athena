@@ -9,6 +9,6 @@ What doesn't work yet -
 * Authentication
 * Connection compression
 * Intelligent (key aware) query routing
-
+* Documentation - sample code
 
 

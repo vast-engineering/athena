@@ -4,9 +4,7 @@ name := "athena"
 
 scalaVersion := "2.11.2"
 
-crossScalaVersions := Seq("2.10.4", "2.11.2")
-
-licenses += "Apache License, Version 2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")
+crossScalaVersions := Seq("2.11.2", "2.10.4")
 
 description := "A fully nonblocking and asynchronous client library for Cassandra."
 
@@ -20,7 +18,7 @@ def spray(artifact: String) = "io.spray" %% artifact % "1.3.1"
 
 libraryDependencies ++= Seq(
   akka("actor"),
-  spray("spray-util"),
+  //spray("spray-util"),
   "com.typesafe.play" %% "play-json" % "2.3.2",
   "com.typesafe.play" %% "play-iteratees" % "2.3.2",
   "com.typesafe" % "config" % "1.2.1",
@@ -32,9 +30,4 @@ libraryDependencies ++= Seq(
   akka("testkit") % "test"
 )
 
-
-releaseSettings
-
 CassandraUtils.cassandraTestSettings
-
-SonatypePublish.sonatypePublishSettings
