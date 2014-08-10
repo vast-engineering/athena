@@ -7,6 +7,8 @@ import scala.concurrent.{ExecutionContext, Await, Future}
 import org.scalatest.{BeforeAndAfterAll, Suite}
 import java.net.{InetSocketAddress, InetAddress}
 
+import scala.util.Random
+
 abstract class AthenaTest(_system: ActorSystem) extends TestKit(_system)
   with Suite with DefaultTimeout with ImplicitSender with BeforeAndAfterAll {
 
@@ -92,7 +94,7 @@ abstract class AthenaTest(_system: ActorSystem) extends TestKit(_system)
   }
 
   private def proxied[A](props: Props, name: String)(f: ActorRef => A): A = {
-      val proxy = TestActorRef(props, testActor, name)
+      val proxy = TestActorRef(props, testActor, s"name-${Random.nextInt()}")
 //    val parent = TestProbe()
 //    val proxy = system.actorOf(Props(new Actor {
 //      val addr = new InetSocketAddress(hosts.head.getHostName, port)
