@@ -85,17 +85,16 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
         log.debug("Attempting connection to {}", host.addr)
         val connectionSettings = settings.localNodeSettings.connectionSettings
         val address = new InetSocketAddress(host.addr, port)
-        val connection = context.actorOf(ConnectionActor.props(self, address, connectionSettings))
+        val connection = context.actorOf(ConnectionActor.props(address, connectionSettings))
 
         {
-          case Athena.Connected(remote, local) if sender() == connection =>
+          case Athena.Connected(remote, _) if sender() == connection =>
             log.debug("Cluster monitor connected to {}", remote)
             if(unconditional) {
               //if unconditional is true, that means that all hosts were previously exhausted
               //we should tell the cluster manager to immediately attempt a reconnect
               commander ! ClusterReconnected
             }
-            connection ! Athena.Register(self)
             connection ! ConnectionActor.SubscribeToEvents
             context.become {
               case ClusterEventsSubscribed =>

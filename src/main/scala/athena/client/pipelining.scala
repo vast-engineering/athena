@@ -10,29 +10,27 @@ import akka.pattern._
 import play.api.libs.iteratee.{Enumeratee, Enumerator}
 import athena.Responses.Timedout
 import athena.Responses.ErrorResponse
-import spray.util.LoggingContext
 import scala.collection.mutable
 
 object pipelining {
   type Pipeline = AthenaRequest => Future[AthenaResponse]
 
-  type QueryPipeline = Statement => Enumerator[Row]
-  type UpdatePipeline = Statement => Future[Seq[Row]]
+  type StreamPipeline = Statement => Enumerator[Row]
+  type RowPipeline = Statement => Future[Seq[Row]]
 
   import play.api.libs.iteratee.Execution.{defaultExecutionContext => dec}
 
   def pipeline(connection: Future[ActorRef])
-              (implicit log: LoggingContext, ec: ExecutionContext, timeout: Timeout): Pipeline = {
+              (implicit ec: ExecutionContext, timeout: Timeout): Pipeline = {
     val pipeF = connection.map(pipeline)
     request => pipeF.flatMap(pipe => pipe(request))
   }
 
-  def pipeline(connection: ActorRef)(implicit log: LoggingContext, ec: ExecutionContext, timeout: Timeout): Pipeline = {
+  def pipeline(connection: ActorRef)(implicit ec: ExecutionContext, timeout: Timeout): Pipeline = {
     request =>
       connection.ask(request).map {
 
         case ErrorResponse(_, error) =>
-          log.debug("Error with request {}, error={}", request, error)
           throw error.toThrowable
 
         case NoHostsAvailable(_, errors) =>
@@ -48,7 +46,6 @@ object pipelining {
           resp
 
         case x =>
-          log.error("Unknown response to query {} - {}", request, x)
           throw new InternalException(s"Unknown response to query $request - $x")
       } recover {
         case e: AskTimeoutException =>
@@ -83,7 +80,7 @@ object pipelining {
     }
   }
 
-  def updatePipeline(connection: ActorRef)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Future[Seq[Row]] = {
+  def updatePipeline(connection: ActorRef)(implicit ec: ExecutionContext, timeout: Timeout): Statement => Future[Seq[Row]] = {
     queryPipeline(pipeline(connection))
   }
 
@@ -95,7 +92,7 @@ object pipelining {
     rowsEnumerator(pipeline)
   }
 
-  def queryPipeline(connection: ActorRef)(implicit ec: ExecutionContext, timeout: Timeout, log: LoggingContext): Statement => Enumerator[Row] = {
+  def queryPipeline(connection: ActorRef)(implicit ec: ExecutionContext, timeout: Timeout): Statement => Enumerator[Row] = {
     streamingPipeline(pipeline(connection))
   }
 
@@ -112,7 +109,7 @@ object pipelining {
         } else {
           getRows(pipeline, stmt, state.pageInfo).map { rowsOpt =>
             //optimization - if there are no rows in the page, then don't return anything
-            rowsOpt.filter(!_.data.isEmpty).map { rows =>
+            rowsOpt.filter(_.data.nonEmpty).map { rows =>
             //only create the metadata once - it will be the same for every page
               val pageMetadata = state.metadata.getOrElse(ResultSetMetadata(rows))
               val nextState = EnumeratorState(rows.pagingState, Some(pageMetadata), beforeFirstPage = false)

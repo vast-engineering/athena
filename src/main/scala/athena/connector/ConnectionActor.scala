@@ -8,7 +8,7 @@ import akka.actor.Terminated
 
 import athena._
 import athena.connector.pipeline._
-import athena.util.{StreamIDManager, Timestamp}
+import athena.util.Timestamp
 import athena.connector.pipeline.RequestEnvelope
 import athena.connector.pipeline.ResponseEnvelope
 
@@ -19,11 +19,10 @@ import scala.concurrent.duration.{FiniteDuration, Duration, DurationInt}
 import scala.collection.mutable
 
 import scala.language.postfixOps
-import athena.Responses.{AthenaResponse, Timedout, RequestFailed}
+import athena.Responses.{AthenaResponse, Timedout}
 import athena.connector.CassandraRequests.{CassandraRequest, QueryParams, QueryRequest}
 import athena.Requests.{KeyspaceAwareRequest, AthenaRequest}
-import athena.connector.CassandraResponses.{Ready, KeyspaceResult, CassandraResponse, ClusterEvent}
-import spray.util.LoggingContext
+import athena.connector.CassandraResponses.{Ready, KeyspaceResult, ClusterEvent}
 
 /**
  * An Actor that handles communication for a single connection to a Cassandra server. This Actor responds two main commands,
@@ -45,8 +44,7 @@ import spray.util.LoggingContext
  *
  * @author David Pratt (dpratt@vast.com)
  */
-private[athena] class ConnectionActor(connectCommander: ActorRef,
-                                      remoteAddress: InetSocketAddress,
+private[athena] class ConnectionActor(remoteAddress: InetSocketAddress,
                                       settings: ConnectionSettings,
                                       initialKeyspace: Option[String] = None)
   extends Actor with ActorLogging {
@@ -131,17 +129,17 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
 
       case Tcp.CommandFailed(_: Tcp.Connect) ⇒
         log.warning("Connection to {} failed with error.", remoteAddress)
-        connectCommander ! Athena.ConnectionFailed(remoteAddress)
+        context.parent ! Athena.ConnectionFailed(remoteAddress)
         context.stop(self)
 
       case ReceiveTimeout ⇒
         log.warning("Connection to {} timed out.", remoteAddress)
-        connectCommander ! Athena.ConnectionFailed(remoteAddress)
+        context.parent ! Athena.ConnectionFailed(remoteAddress)
         context.stop(self)
 
       case c: Athena.CloseCommand =>
         log.debug("Closing during connection phase.")
-        connectCommander ! Athena.ConnectionFailed(remoteAddress)
+        context.parent ! Athena.ConnectionFailed(remoteAddress)
         sender() ! c.event
         context.stop(self)
 
@@ -171,12 +169,12 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
         } else {
           log.warning("Connection unexpectedly closed.")
         }
-        connectCommander ! Athena.ConnectionFailed(remoteAddress)
+        context.parent ! Athena.ConnectionFailed(remoteAddress)
         stop()
 
       case Terminated(`pipelineHandler`) ⇒
         log.warning("Pipeline handler died while waiting for init - stopping")
-        connectCommander ! Athena.ConnectionFailed(remoteAddress)
+        context.parent ! Athena.ConnectionFailed(remoteAddress)
         shutdown(Set(), Athena.Closed, Tcp.Close)
 
       case cmd: Athena.CloseCommand =>
@@ -281,15 +279,15 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
             setInitialKeyspace()
           case init.Event(ResponseEnvelope(_, resp: Athena.Error)) =>
             log.error("Error while connecting - {}", resp)
-            connectCommander ! Athena.ConnectionFailed(remoteAddress)
+            context.parent ! Athena.ConnectionFailed(remoteAddress)
             shutdown()
           case init.Event(ResponseEnvelope(_, resp)) =>
             log.error("Unexpected response {} to connection request.", resp)
-            connectCommander ! Athena.ConnectionFailed(remoteAddress)
+            context.parent ! Athena.ConnectionFailed(remoteAddress)
             shutdown()
           case ReceiveTimeout =>
             log.error("Timed out waiting for READY response.")
-            connectCommander ! Athena.ConnectionFailed(remoteAddress)
+            context.parent ! Athena.ConnectionFailed(remoteAddress)
             shutdown()
         }
       }
@@ -307,45 +305,33 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
               waitingForRegister()
             case init.Event(ResponseEnvelope(_, resp: CassandraError)) =>
               log.error("Error while setting keyspace - {}", resp)
-              connectCommander ! Athena.ConnectionFailed(remoteAddress, Some(resp))
+              context.parent ! Athena.ConnectionFailed(remoteAddress, Some(resp))
               shutdown()
             case init.Event(ResponseEnvelope(_, resp)) =>
               log.error("Unexpected response {} to keyspace request.", resp)
-              connectCommander ! Athena.ConnectionFailed(remoteAddress, Some(Athena.GeneralError("Invalid keyspace response.")))
+              context.parent ! Athena.ConnectionFailed(remoteAddress, Some(Athena.GeneralError("Invalid keyspace response.")))
               shutdown()
             case ReceiveTimeout =>
               log.error("Timed out waiting for keyspace response.")
-              connectCommander ! Athena.ConnectionFailed(remoteAddress)
+              context.parent ! Athena.ConnectionFailed(remoteAddress)
               shutdown()
           }
         }
       }
 
       def waitingForRegister(): State = {
-
         context.setReceiveTimeout(settings.socketSettings.readTimeout)
-        connectCommander ! Athena.Connected(remoteAddress, localAddress)
-
-        state {
-          case Athena.Register(commander) =>
-            connectionOpen(commander)
-
-          case ReceiveTimeout =>
-            log.error("Connection actor did not receive Register message in time. Shutting down.")
-            shutdown()
-        }
+        context.parent ! Athena.Connected(remoteAddress, initialKeyspace)
+        connectionOpen()
       }
 
       sendStartup()
     }
 
     //ready to take requests
-    def connectionOpen(commander: ActorRef): State = {
+    def connectionOpen(): State = {
 
       context.setReceiveTimeout(Duration.Undefined)
-
-      //death pact with our commander
-      context.watch(commander)
 
       val requestTracker = new RequestMultiplexer(settings.requestTimeout)
 
@@ -360,16 +346,16 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
           log.warning("Connection unexpectedly closed.")
           failAll()
           if(closed.isErrorClosed) {
-            commander ! Athena.ErrorClosed(closed.getErrorCause)
+            context.parent ! Athena.ErrorClosed(closed.getErrorCause)
           } else {
-            commander ! Athena.Closed
+            context.parent ! Athena.Closed
           }
           stop()
 
         case Terminated(`pipelineHandler`) ⇒
           log.warning("Pipeline handler died while waiting for init - stopping")
           failAll()
-          commander ! Athena.ErrorClosed("Pipeline handler died.")
+          context.parent ! Athena.ErrorClosed("Pipeline handler died.")
           shutdown(Set(), Athena.Closed, Tcp.Close)
 
         case cmd: Athena.CloseCommand =>
@@ -447,10 +433,10 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
             requestTracker.removeRequest(streamId).foreach { rCtx =>
               val errorResponse = rCtx.command match {
                 case x@RequestCommand(request) =>
-                  log.error("Request Command timed out - {}", x.toString().take(200))
+                  log.error("Request Command timed out - {}", x.toString.take(200))
                   Timedout(request)
                 case x =>
-                  log.error("Connection command timed out - {}", x.toString().take(200))
+                  log.error("Connection command timed out - {}", x.toString.take(200))
                   ConnectionCommandFailed(x)
               }
 
@@ -488,17 +474,17 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
             case Terminated(`pipelineHandler`) ⇒
               //we need to immediately shut down - this is fatal
               log.debug("Pipeline handler died.")
-              commander ! Athena.ErrorClosed("Pipeline handler died.")
+              context.parent ! Athena.ErrorClosed("Pipeline handler died.")
               stop()
 
             case Athena.Abort =>
               log.debug("Aborting connection.")
-              abort(Set(commander, sender()))
+              abort(Set(context.parent, sender()))
 
             case Athena.Close =>
               //kill any queued requests, but attempt to finish processing outstanding requests
               log.debug("Closing connection.")
-              cleanlyClose(Set(commander, sender()))
+              cleanlyClose(Set(context.parent, sender()))
 
             case BackpressureBuffer.HighWatermarkReached ⇒
               //we need to temporarily stop writing requests to the connection
@@ -607,7 +593,7 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
     case x => ConnectionCommandFailed(x)
   }
 
-  private class RequestMultiplexer(requestTimeout: Duration)(implicit log: LoggingContext) {
+  private class RequestMultiplexer(requestTimeout: Duration) {
 
     //manages request stream IDs for requests - Cassandra uses a signed Byte range from 0 -> 127
     //to do request multiplexing - when a request is enqueued, we pick a unique ID to assign to it
@@ -675,6 +661,34 @@ private[athena] class ConnectionActor(connectCommander: ActorRef,
     }
   }
 
+  /**
+   * A mutable, stateful manager for stream IDs. An instance of this class can manage the assignment and release
+   * of 128 potential stream IDs.
+   */
+  class StreamIDManager {
+
+    import java.util.{BitSet => JBitSet}
+
+    private[this] val bits = new JBitSet(128)
+
+    def nextId(): Option[Byte] = {
+      val index = bits.nextClearBit(0)
+      if(index == -1) {
+        log.warning("Connection has no free stream IDs.")
+        None
+      } else {
+        bits.set(index)
+        Some(index.toByte)
+      }
+    }
+
+    def release(index: Byte) {
+      bits.clear(index)
+    }
+
+  }
+
+
 }
 
 private[connector] trait HasConnectionInfo extends HasLogging with HasActorContext {
@@ -682,14 +696,12 @@ private[connector] trait HasConnectionInfo extends HasLogging with HasActorConte
   def host: InetSocketAddress
 }
 
-private[connector] object ConnectionActor {
+private[athena] object ConnectionActor {
 
-
-  def props(connectCommander: ActorRef,
-            remoteAddress: InetSocketAddress,
+  def props(remoteAddress: InetSocketAddress,
             settings: ConnectionSettings,
             initialKeyspace: Option[String] = None): Props = {
-    Props(new ConnectionActor(connectCommander, remoteAddress, settings, initialKeyspace))
+    Props(new ConnectionActor(remoteAddress, settings, initialKeyspace))
   }
 
   //A trait that marks a command that will cause the connection to create a network request.

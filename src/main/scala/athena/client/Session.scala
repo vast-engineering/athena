@@ -1,16 +1,17 @@
 package athena.client
 
 import akka.actor._
-import akka.io.IO
-import akka.pattern._
+import akka.event.Logging
 import akka.util.Timeout
 import akka.actor.Status.Failure
+import athena.connector.ClusterConnector
 
-import athena.{Responses, Athena}
+import athena.{ClusterConnectorSettings, Responses, Athena}
+import com.typesafe.config.ConfigFactory
 
 import play.api.libs.iteratee.Enumerator
 
-import athena.data.{PreparedStatementDef, CVarChar, CValue}
+import athena.data.{PreparedStatementDef, CValue}
 import athena.Consistency.Consistency
 import athena.SerialConsistency.SerialConsistency
 import athena.Athena.AthenaException
@@ -18,12 +19,10 @@ import athena.Requests.{BoundStatement, Prepare, SimpleStatement}
 
 import java.util.concurrent.TimeUnit
 import java.net.InetAddress
-import scala.concurrent.duration.{FiniteDuration, Duration}
+import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.{Await, Promise, ExecutionContext, Future}
-import spray.util.LoggingContext
 import athena.client.pipelining.Pipeline
 import athena.util.{LoggingSource, Rate}
-import athena.Responses.Rows
 import scala.util.control.NonFatal
 
 trait Session {
@@ -76,7 +75,7 @@ object Session {
    * Create a session using an already existing (and assumed valid) Connection ActorRef.
    */
   def apply(connection: ActorRef, keyspace: String)
-           (implicit logSource: LoggingSource, log: LoggingContext, ec: ExecutionContext): Session = {
+           (implicit logSource: LoggingSource, ec: ExecutionContext): Session = {
     new SimpleSession(pipelining.pipeline(connection), keyspace) {
       /**
        * This method must be called to properly dispose of the Session.
@@ -91,7 +90,7 @@ object Session {
    * Create a session using an already existing (and assumed valid) Connection ActorRef.
    */
   def apply(connection: Future[ActorRef], keyspace: String)
-           (implicit logSource: LoggingSource, log: LoggingContext, ec: ExecutionContext): Session = {
+           (implicit logSource: LoggingSource, ec: ExecutionContext): Session = {
     new SimpleSession(pipelining.pipeline(connection), keyspace) {
       /**
        * This method must be called to properly dispose of the Session.
@@ -106,13 +105,13 @@ object Session {
    * Create a session using an existing ActorSystem
    */
   def apply(initialHosts: Set[InetAddress], port: Int, keyspace: String,
-            waitForConnection: Boolean = true)(implicit system: ActorRefFactory, log: LoggingContext): Session = {
+            waitForConnection: Boolean = true)(implicit system: ActorSystem): Session = {
     import system.dispatcher
+    val log = Logging.apply(system, this.getClass)
     val connection = getConnection(initialHosts, port, system, waitForConnection)
     val pipe = pipelining.pipeline(connection)
     new SimpleSession(pipe, keyspace) {
       def close(): Unit = {
-        log.debug("Killing connection actor.")
         //shutdown our actor
         val closeF = connection.flatMap { c =>
           akka.pattern.gracefulStop(c, defaultTimeoutDuration, Athena.Close) recover {
@@ -139,44 +138,35 @@ object Session {
                             waitForConnect: Boolean = true): Future[ActorRef] = {
     import actorRefFactory.dispatcher
     import akka.pattern._
-    val setup = Athena.ClusterConnectorSetup(hosts, port)
+
+    val cluster = actorRefFactory.actorOf(ClusterConnector.props(hosts, port, ClusterConnectorSettings(ConfigFactory.load())))
 
     if(waitForConnect) {
       val initializer = actorRefFactory.actorOf(Props(new ConnectorInitializer(defaultTimeoutDuration)))
-      initializer.ask(setup).mapTo[ActorRef]
+      initializer.ask(ConnectorInitializer.InitCluster(cluster)).mapTo[ActorRef]
     } else {
-      IO(Athena)(spray.util.actorSystem(actorRefFactory)).ask(setup).mapTo[Athena.ClusterConnectorInfo].map(_.clusterConnector)
+      Future.successful(cluster)
     }
+  }
+
+  private object ConnectorInitializer {
+    case class InitCluster(cluster: ActorRef)
   }
 
   private class ConnectorInitializer(connectTimeout: FiniteDuration) extends Actor with ActorLogging {
 
+    import ConnectorInitializer._
+
     def receive: Receive = {
-      case x: Athena.ClusterConnectorSetup =>
-        IO(Athena)(context.system) ! x
-        waitingForConnector(sender())
-    }
-
-    private def waitingForConnector(commander: ActorRef) {
-
-      context.setReceiveTimeout(connectTimeout)
-
-      context.become {
-        case Athena.ClusterConnectorInfo(connector, _) =>
-          log.debug("Got cluster connection actor")
-          waitingForConnection(commander, connector)
-
-        case ReceiveTimeout =>
-          log.warning("Timed out waiting for cluster to connect.")
-          commander ! Failure(new AthenaException("Timed out waiting for cluster to connect."))
-          context.stop(self)
-      }
+      case InitCluster(cluster) =>
+        waitingForConnection(sender(), cluster)
     }
 
     private def waitingForConnection(commander: ActorRef, connector: ActorRef) {
 
       import context.dispatcher
-      context.setReceiveTimeout(Duration.Inf)
+
+      connector ! Athena.AddClusterStatusListener(self)
 
       val timeoutJob = context.system.scheduler.scheduleOnce(connectTimeout) {
         self ! 'abort
@@ -205,8 +195,9 @@ object Session {
   }
 
   abstract class SimpleSession(pipeline: Pipeline, keyspace: String)
-                                      (implicit logSource: LoggingSource, log: LoggingContext, ec: ExecutionContext) extends Session {
+                                      (implicit logSource: LoggingSource, ec: ExecutionContext) extends Session {
 
+    private[this] val log = logSource(this.getClass.getName)
     private[this] val queryLog = logSource("query.SimpleSession")
     private[this] val queryPipe = pipelining.queryPipeline(pipeline)
     private[this] val streamPipe = pipelining.streamingPipeline(pipeline)

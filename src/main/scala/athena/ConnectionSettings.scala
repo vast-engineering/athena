@@ -2,12 +2,9 @@ package athena
 
 import scala.concurrent.duration.Duration
 
-import spray.util._
 import com.typesafe.config.Config
-import athena.util.SettingsBase
+import athena.util._
 import Consistency._
-import akka.actor.ActorRefFactory
-import SerialConsistency._
 import SerialConsistency.SerialConsistency
 
 /**
@@ -19,15 +16,12 @@ case class ConnectionSettings(requestTimeout: Duration, querySettings: QuerySett
 
 object ConnectionSettings extends SettingsBase[ConnectionSettings]("athena.connection") {
   def fromSubConfig(c: Config): ConnectionSettings = {
-    apply(
+    ConnectionSettings(
       c.getDuration("request-timeout"),
       QuerySettings.fromSubConfig(c.getConfig("query")),
       SocketSettings.fromSubConfig(c.getConfig("socket"))
     )
   }
-  def apply(optionalSettings: Option[ConnectionSettings])(implicit actorRefFactory: ActorRefFactory): ConnectionSettings =
-    optionalSettings getOrElse apply(actorSystem)
-
 }
 
 case class QuerySettings(
@@ -58,8 +52,8 @@ case class SocketSettings (
 //  sendBufferSize: Int) {
                             ) {
 
-  requirePositive(connectTimeout)
-  requirePositive(readTimeout)
+  require(connectTimeout > Duration.Zero, "connect-timeout must be greater than zero.")
+  require(readTimeout > Duration.Zero, "read-timeout mus tbe greater than zero.")
 //  require(0 < soLinger, "so-linger must be > 0")
 //  require(0 < receiveBufferSize, "receive-buffer-size must be > 0")
 //  require(0 < sendBufferSize, "send-buffer-size must be > 0")

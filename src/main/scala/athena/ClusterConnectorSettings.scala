@@ -1,7 +1,5 @@
 package athena
 
-import spray.util._
-
 import athena.util.SettingsBase
 import com.typesafe.config.Config
 

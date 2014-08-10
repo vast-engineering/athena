@@ -7,10 +7,7 @@ import java.net.{InetAddress, InetSocketAddress}
 
 import Consistency._
 
-import spray.util.actorSystem
-import athena.connector.CassandraError
-
-object Athena extends ExtensionKey[AthenaExt] {
+object Athena {
 
   /**
    * An object describing an error.
@@ -44,44 +41,6 @@ object Athena extends ExtensionKey[AthenaExt] {
    */
   sealed trait ExtensionCommand extends Command
 
-  sealed trait ConnectionCreationCommand extends ExtensionCommand
-
-  /**
-   * A command to initiate a single connection to a single Cassandra node.
-   */
-  case class Connect(remoteAddress: InetSocketAddress,
-                     settings: Option[ConnectionSettings] = None,
-                     initialKeyspace: Option[String] = None) extends ConnectionCreationCommand
-
-  /**
-   * Must be sent to a connection actor after the receipt of a Conneced event. All further communication will be with teh
-   * designated handler actor.
-   */
-  case class Register(handler: ActorRef) extends Command
-
-  /**
-   * A command to initiate a managed connection pool to a single Cassandra node.
-   *
-   * @param remoteAddress The host and port to connect to.
-   * @param settings Settings for the pool - if this is not defined, default settings read from the ActorSystem's config will be used.
-   */
-  case class NodeConnectorSetup(remoteAddress: InetSocketAddress,
-                                settings: Option[NodeConnectorSettings] = None) extends ConnectionCreationCommand {
-    private[athena] def normalized(implicit refFactory: ActorRefFactory) =
-      if (settings.isDefined) {
-        this
-      } else {
-        copy(settings = Some(NodeConnectorSettings(actorSystem)))
-      }
-  }
-
-  object NodeConnectorSetup {
-    def apply(host: String, port: Int,
-              settings: Option[NodeConnectorSettings])
-              (implicit refFactory: ActorRefFactory): NodeConnectorSetup =
-      NodeConnectorSetup(new InetSocketAddress(host, port), settings).normalized
-  }
-
   /**
    * A command to initiate a connection to a cluster of Cassandra nodes. The sender of this message will receive a
    * [[ClusterConnectorInfo]] message with information about the cluster connection. Additionally, the sender will
@@ -90,18 +49,15 @@ object Athena extends ExtensionKey[AthenaExt] {
    * @param initialHosts A list of host addressed used to seed the cluster.
    * @param port the port used to connect
    * @param settings Settings for the cluster - if this is not defined, default settings read from the ActorSystem's config will be used.
-   * @param failOnInit If true, the cluster conntection will fail at initialization time if no hosts are reachable. If false,
-   *                   it will continue to attempt reconnects.
    * @param useExisting if true, an existing connector initialized with the same settings will be used (if present). If false
    *                    or there is no active connection, a new connector will be created.
    */
   case class ClusterConnectorSetup(initialHosts: Set[InetAddress], port: Int,
                                    settings: Option[ClusterConnectorSettings] = None,
-                                   failOnInit: Boolean = false,
-                                   useExisting: Boolean = true) extends ConnectionCreationCommand {
-    private[athena] def normalized(implicit refFactory: ActorRefFactory) =
+                                   useExisting: Boolean = true) extends ExtensionCommand {
+    private[athena] def normalized(config: Config) =
       if (settings.isDefined) this
-      else copy(settings = Some(ClusterConnectorSettings(actorSystem)))
+      else copy(settings = Some(ClusterConnectorSettings(config)))
   }
 
   //Send to a cluster connector actor to monitor (or stop monitoring) it's state
@@ -173,12 +129,11 @@ object Athena extends ExtensionKey[AthenaExt] {
    * command. The connection is characterized by the `remoteAddress`
    * and `localAddress` TCP endpoints.
    */
-  case class Connected(remoteAddress: InetSocketAddress, localAddress: InetSocketAddress) extends ConnectionCreatedEvent
+  case class Connected(remoteAddress: InetSocketAddress, keyspace: Option[String]) extends ConnectionCreatedEvent
 
   /**
-   * Sent on successful creation of a node or cluster connector.
+   * Sent on by the extension on the successful creation of a cluster connector.
    */
-  case class NodeConnectorInfo(nodeConnector: ActorRef, setup: NodeConnectorSetup) extends ConnectionCreatedEvent
   case class ClusterConnectorInfo(clusterConnector: ActorRef, setup: ClusterConnectorSetup) extends ConnectionCreatedEvent
 
 
@@ -307,16 +262,3 @@ object Athena extends ExtensionKey[AthenaExt] {
     }
   }
 }
-
-
-
-class AthenaExt(system: ExtendedActorSystem) extends akka.io.IO.Extension {
-
-  val Settings = new Settings(system.settings.config.getConfig("athena"))
-  class Settings private[AthenaExt](config: Config) {
-  }
-
-  val manager = system.actorOf(props = Props[AthenaManager](new AthenaManager(Settings)), name = "IO-Athena")
-
-}
-

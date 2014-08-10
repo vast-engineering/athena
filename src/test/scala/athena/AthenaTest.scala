@@ -1,10 +1,10 @@
 package athena
 
 import akka.testkit._
-import akka.actor.{ActorRef, ActorSystem}
+import akka.actor.{Actor, Props, ActorRef, ActorSystem}
+import athena.connector.{ClusterConnector, ConnectionActor, NodeConnector}
 import scala.concurrent.{ExecutionContext, Await, Future}
 import org.scalatest.{BeforeAndAfterAll, Suite}
-import akka.io.IO
 import java.net.{InetSocketAddress, InetAddress}
 
 abstract class AthenaTest(_system: ActorSystem) extends TestKit(_system)
@@ -26,6 +26,7 @@ abstract class AthenaTest(_system: ActorSystem) extends TestKit(_system)
 
   protected val hosts: Set[InetAddress] = system.settings.config.getStringList("athena.test.hosts").map(InetAddress.getByName)(collection.breakOut)
   protected val port = system.settings.config.getInt("athena.test.port")
+  protected val config = system.settings.config
 
   override protected def afterAll() {
     shutdown(system, verifySystemShutdown = true)
@@ -41,41 +42,34 @@ abstract class AthenaTest(_system: ActorSystem) extends TestKit(_system)
 
   protected def withClusterConnection[A](ksName: String = "testks")(f: ActorRef => A): A = {
     withKeyspace(ksName) {
-      val probe = TestProbe()
-      val connector = {
-        IO(Athena).tell(Athena.ClusterConnectorSetup(hosts, port, None, useExisting = false), probe.ref)
-        probe.expectMsgType[Athena.ClusterConnectorInfo]
-        probe.fishForMessage() {
+      proxied(ClusterConnector.props(hosts, port, ClusterConnectorSettings(system)), "cluster-connector") { proxy =>
+        fishForMessage() {
           case Athena.ClusterConnected => true
           case x: Athena.ClusterStatusEvent => false
         }
-        probe.lastSender
-      }
-
-      try {
-        f(connector)
-      } finally {
-        connector ! Athena.Close
-        within(10 seconds) { expectMsgType[Athena.ConnectionClosed] }
+        try {
+          f(proxy)
+        } finally {
+          proxy ! Athena.Close
+          within(10 seconds) { expectMsgType[Athena.ConnectionClosed] }
+        }
       }
     }
   }
 
   protected def withNodeConnection[A](ksName: String = "testks")(f: ActorRef => A): A = {
     withKeyspace(ksName) {
-      val connector = {
-        IO(Athena) ! Athena.NodeConnectorSetup(hosts.head.getHostName, port, None)
-        expectMsgType[Athena.NodeConnectorInfo].nodeConnector
+      val addr = new InetSocketAddress(hosts.head.getHostName, port)
+      val settings = NodeConnectorSettings(system)
+      proxied(NodeConnector.props(addr, settings), "node-connection") { proxy =>
         expectMsgType[Athena.NodeConnected]
-        lastSender
-      }
-
-      try {
-        f(connector)
-      } finally {
-        connector ! Athena.Close
-        within(10 seconds) {
-          expectMsgType[Athena.ConnectionClosed]
+        try {
+          f(proxy)
+        } finally {
+          proxy ! Athena.Close
+          within(10 seconds) {
+            expectMsgType[Athena.ConnectionClosed]
+          }
         }
       }
     }
@@ -83,21 +77,38 @@ abstract class AthenaTest(_system: ActorSystem) extends TestKit(_system)
 
   protected def withConnection[A](keyspace: Option[String] = None)(f: ActorRef => A): A = {
     withKeyspace(keyspace.getOrElse("testks")) {
-      val probe = TestProbe()
-      val connector = {
-        IO(Athena).tell(Athena.Connect(new InetSocketAddress(hosts.head.getHostName, port), initialKeyspace = keyspace), probe.ref)
-        probe.expectMsgType[Athena.Connected]
-        val connection = probe.lastSender
-        connection ! Athena.Register(self)
-        connection
-      }
-      try {
-        f(connector)
-      } finally {
-        connector ! Athena.Close
-        within(10 seconds) { expectMsgType[Athena.ConnectionClosed] }
+      val addr = new InetSocketAddress(hosts.head.getHostName, port)
+      val settings = ConnectionSettings(system)
+      proxied(ConnectionActor.props(addr, settings, keyspace), "connection") { proxy =>
+        expectMsgType[Athena.Connected]
+        try {
+          f(proxy)
+        } finally {
+          proxy ! Athena.Close
+          within(10 seconds) { expectMsgType[Athena.ConnectionClosed] }
+        }
       }
     }
   }
+
+  private def proxied[A](props: Props, name: String)(f: ActorRef => A): A = {
+      val proxy = TestActorRef(props, testActor, name)
+//    val parent = TestProbe()
+//    val proxy = system.actorOf(Props(new Actor {
+//      val addr = new InetSocketAddress(hosts.head.getHostName, port)
+//      val settings = NodeConnectorSettings(system)
+//      val child = context.actorOf(props, name)
+//      def receive = {
+//        case x if sender == child => parent.ref forward x
+//        case x => child forward x
+//      }
+//    }))
+    try {
+      f(proxy)
+    } finally {
+      system.stop(proxy)
+    }
+  }
+
 
 }

@@ -3,7 +3,6 @@ package athena.connector
 import athena._
 import akka.util.ByteString
 import athena.data.{PreparedStatementDef, Metadata}
-import spray.util.LoggingContext
 
 private object CommandConverters {
 
@@ -16,13 +15,13 @@ private object CommandConverters {
   //a bunch of stuff to convert from Athena - this is lame and should probably be cleaned up.
 
   //TODO - not in love with these - should better modularize all of this
-  def convertRequest(cmd: AthenaRequest, settings: QuerySettings)(implicit log: LoggingContext): CassandraRequest = cmd match {
+  def convertRequest(cmd: AthenaRequest, settings: QuerySettings): CassandraRequest = cmd match {
     case stmt: Requests.Statement => convertStatement(stmt, settings, None)
     case Requests.FetchRows(stmt, pagingState) => convertStatement(stmt, settings, Some(pagingState))
     case Requests.Prepare(statement, _) => CassandraRequests.Prepare(statement)
   }
 
-  def convertResponse(req: AthenaRequest, resp: CassandraResponse)(implicit log: LoggingContext): AthenaResponse = {
+  def convertResponse(req: AthenaRequest, resp: CassandraResponse): AthenaResponse = {
     (req, resp) match {
       case (x, err: CassandraError) =>
         ErrorResponse(x, err)
@@ -43,7 +42,6 @@ private object CommandConverters {
 
       case (_, evt: ClusterEvent) =>
         //shouldn't happen either - cluster events don't get translated
-        log.error("Cannot convert a ClusterEvent to a response. Killing connection.")
         throw new IllegalStateException("Cluster events cannot be converted.")
 
       case (x, res: Result) =>
@@ -54,7 +52,7 @@ private object CommandConverters {
 
   private def convertStatement(stmt: Statement,
                                settings: QuerySettings,
-                               pagingState: Option[ByteString] = None)(implicit log: LoggingContext) = stmt match {
+                               pagingState: Option[ByteString] = None) = stmt match {
     case stmt: SimpleStatement => QueryRequest(stmt.query, queryParams(stmt, settings, pagingState))
     case stmt: BoundStatement => ExecuteRequest(stmt.statementDef.id, queryParams(stmt, settings, pagingState), excludeMetadata = true)
   }
@@ -81,7 +79,7 @@ private object CommandConverters {
     )
   }
 
-  private def resultToQueryEvent(request: QueryCommand, result: Result)(implicit log: LoggingContext): SuccessfulResponse = {
+  private def resultToQueryEvent(request: QueryCommand, result: Result): SuccessfulResponse = {
 
     (request, result) match {
       case (x, SuccessfulResult) =>

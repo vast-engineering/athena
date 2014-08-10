@@ -1,8 +1,6 @@
 package athena
 
-import spray.util._
-
-import athena.util.SettingsBase
+import athena.util._
 import com.typesafe.config.Config
 import scala.concurrent.duration.Duration
 

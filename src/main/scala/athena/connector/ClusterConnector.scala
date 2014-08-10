@@ -11,21 +11,18 @@ import athena.connector.ClusterMonitorActor.{ClusterUnreachable, ClusterReconnec
 import athena.Athena.NodeDisconnected
 import athena.Responses.RequestFailed
 import athena.Athena.NodeConnected
-import athena.Athena.GeneralError
 import athena.Athena.ClusterFailed
 import athena.Athena.NodeFailed
 import athena.Responses.ConnectionUnavailable
 import akka.actor.Terminated
 import athena.Responses.Timedout
 import athena.connector.ClusterInfo.ClusterMetadata
-import spray.util.LoggingContext
 import athena.data.PreparedStatementDef
 import akka.actor.Status.Failure
 import athena.util.MD5Hash
 
 class ClusterConnector(initialHosts: Set[InetAddress], port: Int,
-                                       settings: ClusterConnectorSettings,
-                                       failOnInit: Boolean = false) extends Actor with ActorLogging {
+                                       settings: ClusterConnectorSettings) extends Actor with ActorLogging {
 
   import ClusterConnector._
 
@@ -51,17 +48,13 @@ class ClusterConnector(initialHosts: Set[InetAddress], port: Int,
 
   private[this] val actorNameIndex = Iterator from 0
 
-  private[this] var statusListeners: Set[ActorRef] = Set.empty
+  private[this] var statusListeners: Set[ActorRef] = Set(context.parent)
 
   private[this] var currentStatus: ClusterStatusEvent = ClusterDisconnected
 
   private[this] var preparedStatements: Map[MD5Hash, PreparedStatementDef] = Map.empty
 
   private[this] val defaultBehavior: Receive = {
-    case req: AthenaRequest =>
-      log.warning("Rejecting request due to default behavior")
-      sender ! ConnectionUnavailable(req)
-
     case cmd: Athena.CloseCommand =>
       context.become(closing(cmd, Set(sender())))
 
@@ -127,9 +120,9 @@ class ClusterConnector(initialHosts: Set[InetAddress], port: Int,
       case ClusterReconnected =>
         context.become(initializing)
 
-      case ClusterUnreachable if failOnInit =>
-        updateStatus(ClusterFailed(GeneralError("Cluster is unreachable.")))
-        context.stop(self) //boom
+      case req: AthenaRequest =>
+        log.warning("Rejecting request while initializing.")
+        sender ! ConnectionUnavailable(req)
 
     }
 
@@ -281,7 +274,7 @@ class ClusterConnector(initialHosts: Set[InetAddress], port: Int,
     //watch the pool actor, if it dies, so do we.
     val pool = context.watch {
       context.actorOf(
-        props = NodeConnector.props(self, new InetSocketAddress(host, port), settings.localNodeSettings, preparedStatements),
+        props = NodeConnector.props(new InetSocketAddress(host, port), settings.localNodeSettings, preparedStatements),
         name = "node-connector-" + actorNameIndex.next()
       )
     }
@@ -329,9 +322,8 @@ class ClusterConnector(initialHosts: Set[InetAddress], port: Int,
 object ClusterConnector {
 
   def props(initialHosts: Set[InetAddress], port: Int,
-            settings: ClusterConnectorSettings,
-            failOnInit: Boolean): Props = {
-    Props(new ClusterConnector(initialHosts, port, settings, failOnInit))
+            settings: ClusterConnectorSettings): Props = {
+    Props(new ClusterConnector(initialHosts, port, settings))
   }
 
   /**
@@ -498,7 +490,7 @@ object ClusterConnector {
 
     var index = 0
 
-    def roundRobinPlan(state: IndexedSeq[ConnectedHost])(implicit log: LoggingContext): Iterator[ConnectedHost] = {
+    def roundRobinPlan(state: IndexedSeq[ConnectedHost]): Iterator[ConnectedHost] = {
 
       val startIndex = index
 
