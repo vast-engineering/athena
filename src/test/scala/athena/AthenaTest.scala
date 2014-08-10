@@ -94,17 +94,7 @@ abstract class AthenaTest(_system: ActorSystem) extends TestKit(_system)
   }
 
   private def proxied[A](props: Props, name: String)(f: ActorRef => A): A = {
-      val proxy = TestActorRef(props, testActor, s"name-${Random.nextInt()}")
-//    val parent = TestProbe()
-//    val proxy = system.actorOf(Props(new Actor {
-//      val addr = new InetSocketAddress(hosts.head.getHostName, port)
-//      val settings = NodeConnectorSettings(system)
-//      val child = context.actorOf(props, name)
-//      def receive = {
-//        case x if sender == child => parent.ref forward x
-//        case x => child forward x
-//      }
-//    }))
+    val proxy = TestActorRef(props, testActor, s"name-${Random.nextInt()}")
     try {
       f(proxy)
     } finally {
