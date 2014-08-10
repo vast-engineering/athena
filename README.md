@@ -62,3 +62,20 @@ AthenaRequest => Future[AthenaResponse]
 A Session wraps a pipeline and adds more useful methods on top of it, and also the ability to stream rows back using
 Play Enumerators. The entirety of this API, however, is really just a prototype and is subject to change across versions
 with little to no warning.
+
+## Building
+Athena is built with SBT 0.13.x, and is designed to be essentially and out of the box build. You should be able to
+compile, package and (if needed) deploy locally by simply doing 'sbt publishLocal' from the command line. The
+test suite requires an active instance of cassandra to run against. Fortunately, the SBT harness is built in such a way
+that it automatically handles downloading the proper version of cassandra, configuring it, starting the server
+and setting up a test keyspace before the tests run. This instance is then torn down after tests complete. Most of this
+functionality is configured using SBT settings - look in project/CassandraUtils.scala for info on how to change it.
+For example, if you wish to disable the server auto-provisioning to use your own instance, just add
+
+```scala
+import CassandraUtils.Keys._
+
+provisionServer := false
+```
+
+to your local.sbt file.
