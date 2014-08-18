@@ -85,7 +85,7 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
         log.debug("Attempting connection to {}", host.addr)
         val connectionSettings = settings.localNodeSettings.connectionSettings
         val address = new InetSocketAddress(host.addr, port)
-        val connection = context.actorOf(ConnectionActor.props(address, connectionSettings))
+        val connection = context.actorOf(ConnectionActor.props(address, connectionSettings), name = "connection")
 
         {
           case Athena.Connected(remote, _) if sender() == connection =>
