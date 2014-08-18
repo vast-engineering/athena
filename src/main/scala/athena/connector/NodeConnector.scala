@@ -520,9 +520,11 @@ private[athena] class NodeConnector(remoteAddress: InetSocketAddress,
 
   }
 
+  private val connectionCounter = Iterator from 0
+
   private def spawnNewConnection(keyspace: Option[String] = None): ActorRef = {
     log.debug("Spawning new connection to keyspace {}", keyspace)
-    val connection = context.watch(context.actorOf(ConnectionActor.props(remoteAddress, settings.connectionSettings, keyspace)))
+    val connection = context.watch(context.actorOf(ConnectionActor.props(remoteAddress, settings.connectionSettings, keyspace), name = s"connection-${connectionCounter.next()}"))
     liveConnections.update(connection, Connecting(keyspace))
     connection
   }

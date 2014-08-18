@@ -293,7 +293,7 @@ class ClusterConnector(initialHosts: Set[InetAddress], port: Int,
 
   private def closeActor(pool: ActorRef): ActorRef = {
     context.unwatch(pool)
-    context.actorOf(CloseActor.props(pool, Athena.Close, settings.localNodeSettings.closeTimeout))
+    context.actorOf(CloseActor.props(pool, Athena.Close, settings.localNodeSettings.closeTimeout), name = "close-actor-" + actorNameIndex.next())
   }
 
   //ingest the new cluster data sent by the monitor actor and adjust our pools accordingly.
