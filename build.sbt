@@ -17,11 +17,11 @@ def akka(artifact: String) = "com.typesafe.akka" %% ("akka-" + artifact) % "2.3.
 
 libraryDependencies ++= Seq(
   akka("actor"),
-  "com.typesafe.play" %% "play-json" % "2.3.2",
-  "com.typesafe.play" %% "play-iteratees" % "2.3.2",
+  "com.typesafe.play" %% "play-json" % "2.3.3",
+  "com.typesafe.play" %% "play-iteratees" % "2.3.3",
   "com.typesafe" % "config" % "1.2.1",
   "com.chuusai" %% "shapeless" % "1.2.4",
-  "org.scalatest" %% "scalatest" % "2.2.0" % "test",
+  "org.scalatest" %% "scalatest" % "2.2.1" % "test",
   "ch.qos.logback" % "logback-classic" % "1.1.2" % "test",
   akka("slf4j") % "test",
   akka("testkit") % "test"
