@@ -13,7 +13,7 @@ javacOptions in Compile ++= Seq("-source", "1.6", "-target", "1.6")
 
 resolvers += Resolver.typesafeRepo("releases")
 
-def akka(artifact: String) = "com.typesafe.akka" %% ("akka-" + artifact) % "2.3.4"
+def akka(artifact: String) = "com.typesafe.akka" %% ("akka-" + artifact) % "2.3.5"
 
 libraryDependencies ++= Seq(
   akka("actor"),
@@ -21,7 +21,7 @@ libraryDependencies ++= Seq(
   "com.typesafe.play" %% "play-iteratees" % "2.3.3",
   "com.typesafe" % "config" % "1.2.1",
   "com.chuusai" %% "shapeless" % "1.2.4",
-  "org.scalatest" %% "scalatest" % "2.2.1" % "test",
+  "org.scalatest" %% "scalatest" % "2.2.2" % "test",
   "ch.qos.logback" % "logback-classic" % "1.1.2" % "test",
   akka("slf4j") % "test",
   akka("testkit") % "test"

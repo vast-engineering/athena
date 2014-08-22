@@ -2,7 +2,6 @@ package athena.connector
 
 import athena.{Athena, ClusterConnectorSettings}
 import akka.actor._
-import akka.io.IO
 import akka.pattern._
 
 import java.net.{InetAddress, InetSocketAddress}
@@ -16,7 +15,6 @@ import akka.util.Timeout
 import athena.connector.CassandraResponses._
 import akka.actor.Status.Failure
 import athena.connector.CassandraResponses.NewNode
-import scala.Some
 import akka.actor.Terminated
 import athena.connector.ClusterInfo.ClusterMetadata
 import athena.connector.ClusterConnector.HostStatusChanged
@@ -44,7 +42,7 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
 
   }
 
-  def receive = reconnect(seedHosts.map(a => a -> HostInfo(a)).toMap, true)
+  def receive = reconnect(seedHosts.map(a => a -> HostInfo(a)).toMap, unconditional = true)
 
   def unconnected(hosts: Map[InetAddress, HostInfo]): Receive = {
     context.setReceiveTimeout(Duration.Inf)
@@ -59,7 +57,7 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
 
     {
       case 'reconnect =>
-        context.become(reconnect(hosts, true))
+        context.become(reconnect(hosts, unconditional = true))
 
       case cmd: Athena.CloseCommand =>
         sender() ! cmd.event
@@ -76,6 +74,7 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
     // TODO: Parameterize this
     context.setReceiveTimeout(defaultTimeoutDuration)
 
+    val connectionCounter = Iterator from 0
     def tryConnect(connectionHosts: IndexedSeq[HostInfo]): Receive = {
 
       if(connectionHosts.isEmpty) {
@@ -85,7 +84,7 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
         log.debug("Attempting connection to {}", host.addr)
         val connectionSettings = settings.localNodeSettings.connectionSettings
         val address = new InetSocketAddress(host.addr, port)
-        val connection = context.actorOf(ConnectionActor.props(address, connectionSettings), name = "connection")
+        val connection = context.actorOf(ConnectionActor.props(address, connectionSettings), name = "connection-" + connectionCounter.next())
 
         {
           case Athena.Connected(remote, _) if sender() == connection =>
@@ -113,6 +112,7 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
             } else {
               log.debug("Connection to host {} failed, trying next host.", connectionHosts.head.addr)
             }
+            sender() ! PoisonPill
             context.become(tryConnect(connectionHosts.tail))
 
           case ReceiveTimeout =>
@@ -157,7 +157,7 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
 
       case Terminated(`connection`) =>
         log.warning("Connection to {} closed. Trying next host.", connectedHost)
-        context.become(reconnect(hosts, false))
+        context.become(reconnect(hosts, unconditional = false))
 
       case NodeDisconnected(addr) if addr == connectedHost.addr =>
         context.unwatch(connection)
@@ -196,7 +196,7 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
           case NewNode(socketAddr) =>
             val addr = socketAddr.getAddress
             updateClusterInfo(connectedHost.addr, pipeline) pipeTo self
-            context.become(whileConnected(hosts.updated(addr, HostInfo(addr, true))))
+            context.become(whileConnected(hosts.updated(addr, HostInfo(addr, isUp = true))))
 
           case NodeRemoved(socketAddr) =>
             val addr = socketAddr.getAddress
@@ -219,10 +219,10 @@ private[connector] class ClusterMonitorActor(commander: ActorRef, seedHosts: Set
       meta.hosts.keys.map { addr =>
         //the cluster metadata contains the canonical list - if we already have it in our
         //list, use it, if not, create a new entry
-        val host = hosts.get(addr).getOrElse {
+        val host = hosts.getOrElse(addr, {
           log.debug("Adding new host {}.", addr)
-          HostInfo(addr, true)
-        }
+          HostInfo(addr, isUp = true)
+        })
         addr -> host
       }.toMap
     }
