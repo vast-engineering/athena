@@ -14,7 +14,7 @@ object ConnectorOperations {
   def sendRequest(connectionActor: ActorRef, req: AthenaRequest)(implicit log: LoggingAdapter, ec: ExecutionContext, timeout: Timeout): Future[AthenaResponse] = {
     connectionActor.ask(req).map {
       case t: Timedout =>
-        throw new QueryTimeoutException("Query execution timed out.")
+        throw new QueryTimeoutException(s"Query execution timed out after ${timeout.duration}")
       case e: RequestFailed =>
         throw new AthenaException(s"Request failed for unknown reason - $e")
       case ErrorResponse(_, error) =>

@@ -37,7 +37,7 @@ object pipelining {
           throw new NoHostAvailableException("No hosts available for request.", errors)
 
         case t: Timedout =>
-          throw new QueryTimeoutException("Query execution timed out.")
+          throw new QueryTimeoutException(s"Query execution timed out after ${timeout.duration}.")
 
         case resp: AthenaResponse if resp.isFailure =>
           throw new AthenaException(s"Request failed - $resp")
@@ -49,7 +49,7 @@ object pipelining {
           throw new InternalException(s"Unknown response to query $request - $x")
       } recover {
         case e: AskTimeoutException =>
-          throw new QueryTimeoutException("Query execution timed out.")
+          throw new QueryTimeoutException(s"Query execution timed out after ${timeout.duration}.")
       }
   }
 
