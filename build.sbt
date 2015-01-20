@@ -2,9 +2,9 @@ organization := "com.vast"
 
 name := "athena"
 
-scalaVersion := "2.11.2"
+scalaVersion := "2.11.5"
 
-crossScalaVersions := Seq("2.11.2", "2.10.4")
+crossScalaVersions := Seq("2.11.5", "2.10.4")
 
 description := "A fully nonblocking and asynchronous client library for Cassandra."
 
@@ -13,12 +13,14 @@ javacOptions in Compile ++= Seq("-source", "1.6", "-target", "1.6")
 
 resolvers += Resolver.typesafeRepo("releases")
 
-def akka(artifact: String) = "com.typesafe.akka" %% ("akka-" + artifact) % "2.3.5"
+def akka(artifact: String) = "com.typesafe.akka" %% ("akka-" + artifact) % "2.3.6"
+
+def play(artifact: String) = "com.typesafe.play" %% ("play-" + artifact) % "2.3.6"
 
 libraryDependencies ++= Seq(
   akka("actor"),
-  "com.typesafe.play" %% "play-json" % "2.3.3",
-  "com.typesafe.play" %% "play-iteratees" % "2.3.3",
+  play("json"),
+  play("iteratees"),
   "com.typesafe" % "config" % "1.2.1",
   "com.chuusai" %% "shapeless" % "1.2.4",
   "org.scalatest" %% "scalatest" % "2.2.2" % "test",

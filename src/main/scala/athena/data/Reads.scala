@@ -4,7 +4,7 @@ import scala.annotation.implicitNotFound
 import akka.util.ByteString
 import athena.util.ByteStringUtils._
 import java.nio.ByteOrder
-import org.joda.time.DateTime
+import org.joda.time.{DateTimeZone, DateTime}
 import java.util.{UUID, Date}
 import java.net.InetAddress
 
@@ -151,6 +151,7 @@ trait DefaultReads {
     case CInt(value) => CvSuccess(value)
     case CBigInt(value) => CvSuccess(value)
     case CCounter(value) => CvSuccess(value)
+    case CTimestamp(value) => CvSuccess(value)
   }
 
   implicit val BigIntReads: Reads[java.math.BigInteger] = nonNull {
@@ -168,7 +169,7 @@ trait DefaultReads {
   }
 
   implicit val JodaDateReads: Reads[DateTime] = nonNull {
-    case CTimestamp(date) => CvSuccess(new DateTime(date))
+    case CTimestamp(date) => CvSuccess(new DateTime(date, DateTimeZone.UTC))
   }
 
   implicit val DateReads: Reads[Date] = nonNull {
