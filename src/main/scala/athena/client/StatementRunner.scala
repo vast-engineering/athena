@@ -1,12 +1,21 @@
 package athena.client
 
+import athena.Athena.RowConversionException
 import play.api.libs.iteratee.{Enumeratee, Iteratee, Enumerator}
 import scala.concurrent.{ExecutionContext, Future}
 import athena.data.{CvResult, CValue}
-import athena.util.Rate
 
 trait StatementRunner[A] {
+  self =>
+
   def execute(implicit session: Session, ec: ExecutionContext): A
+
+  def map[B](f: A => B): StatementRunner[B] = new StatementRunner[B] {
+    override def execute(implicit session: Session, ec: ExecutionContext): B = {
+      f(self.execute)
+    }
+  }
+
 }
 
 object StatementRunner {
@@ -53,16 +62,18 @@ object StatementRunner {
     override def execute(implicit session: Session, ec: ExecutionContext): A = f(session)
   }
 
-  private def mapped[A](f: (Session, ExecutionContext) => A): StatementRunner[A] = new StatementRunner[A] {
-    override def execute(implicit session: Session, ec: ExecutionContext): A = f(session, ec)
-  }
-
   implicit class EnumeratorOps[A](val sr: StatementRunner[Enumerator[A]]) extends AnyVal {
     def headOption(implicit session: Session, ec: ExecutionContext): Future[Option[A]] = sr.execute |>>> Iteratee.head
     def head(implicit session: Session, ec: ExecutionContext): Future[A] = sr.execute |>>> Iteratee.head map(_.getOrElse(throw new NoSuchElementException("No results for statement.")))
-    def foreach(f: A => Unit)(implicit session: Session, ec: ExecutionContext) = sr.execute |>>> Iteratee.foreach(f)
-    def map[B](f: A => B): StatementRunner[Enumerator[B]] = StatementRunner.mapped[Enumerator[B]] { (session, ec) =>
-      sr.execute(session, ec).map(f)(ec)
+    def fold[B](zero: B)(f: (B, A) => B)(implicit session: Session, ec: ExecutionContext): Future[B] = sr.execute |>>> Iteratee.fold(zero)(f)
+    def foreach(f: A => Unit)(implicit session: Session, ec: ExecutionContext): Future[Unit] = sr.execute |>>> Iteratee.foreach(f)
+  }
+
+  implicit class CvResultOps[A](val sr: StatementRunner[Enumerator[CvResult[A]]]) extends AnyVal {
+    def extractValues: StatementRunner[Enumerator[A]] = new StatementRunner[Enumerator[A]] {
+      override def execute(implicit session: Session, ec: ExecutionContext): Enumerator[A] = {
+        sr.execute.map(_.recoverTotal(errors => throw new RowConversionException(errors)))
+      }
     }
   }
 
@@ -70,9 +81,6 @@ object StatementRunner {
     def headOption(implicit session: Session, ec: ExecutionContext): Future[Option[A]] = sr.execute.map(_.headOption)
     def head(implicit session: Session, ec: ExecutionContext): Future[A] = sr.execute.map(_.head)
     def foreach(f: A => Unit)(implicit session: Session, ec: ExecutionContext) = sr.execute.foreach(res => res.foreach(f))
-    def map[B](f: A => B): StatementRunner[Future[Seq[B]]] = StatementRunner.mapped[Future[Seq[B]]] { (session, ec) =>
-      sr.execute(session, ec).map(_.map(f))(ec)
-    }
   }
 
 

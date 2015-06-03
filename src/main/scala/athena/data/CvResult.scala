@@ -95,6 +95,12 @@ sealed trait CvResult[+A] {
     case CvSuccess(v) => CvSuccess(v)
     case e: CvError => if (errManager isDefinedAt e) errManager(e) else this
   }
+
+  def recoverTotal[AA >: A](f: Seq[String] => AA) = this match {
+    case CvSuccess(v) => v
+    case CvError(e) => f(e)
+  }
+
 }
 
 object CvResult {

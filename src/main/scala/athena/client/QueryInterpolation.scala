@@ -70,8 +70,6 @@ object QueryInterpolation {
 
   }
 
-
-
 }
 
 

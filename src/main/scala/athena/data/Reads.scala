@@ -95,6 +95,10 @@ trait LowPriorityReads {
 
 trait DefaultReads {
 
+  implicit object IdentityReads extends Reads[CValue] {
+    override def read(cvalue: CValue): CvResult[CValue] = CvSuccess(cvalue)
+  }
+
   implicit def optionReads[T](implicit rt: Reads[T]): Reads[Option[T]] = new Reads[Option[T]] {
       def read(cvalue: CValue): CvResult[Option[T]] = cvalue match {
         case CNull => CvSuccess(None)
@@ -209,22 +213,23 @@ trait DefaultReads {
   implicit def mapReads[A, B](implicit keyReads: Reads[A], valueReads: Reads[B], a: TypeTag[A], b: TypeTag[B]): Reads[Map[A, B]] = reads {
     case CNull => CvSuccess(Map.empty)
     case CMap(values) =>
-      val converted = values.map {
-        case (key, value) => keyReads.read(key).zip(valueReads.read(value))
+      values.foldLeft[CvResult[Map[A, B]]](CvSuccess(Map.empty[A, B])) { case (acc, (key, value)) =>
+        acc.reduce(keyReads.read(key).zip(valueReads.read(value))) { case (map, (parsedKey, parsedValue)) =>
+          map.updated(parsedKey, parsedValue)
+        }
       }
-      CvResult.sequence(converted).map(_.toMap)
   }
 
   implicit def seqReads[A](implicit valueReads: Reads[A], a: TypeTag[A]): Reads[Seq[A]] = reads {
     case CNull => CvSuccess(Seq.empty)
     case CList(values) =>
-      CvResult.sequence(values.map(valueReads.read(_)))
+      CvResult.sequence(values.map(valueReads.read))
   }
 
   implicit def setReads[A](implicit valueReads: Reads[A], a: TypeTag[A]): Reads[Set[A]] = reads {
     case CNull => CvSuccess(Set.empty)
-    case CList(values) => CvResult.sequence(values.map(valueReads.read(_)).toSet)
-    case CSet(values) => CvResult.sequence(values.map(valueReads.read(_)))
+    case CList(values) => CvResult.sequence(values.map(valueReads.read)(collection.breakOut))
+    case CSet(values) => CvResult.sequence(values.map(valueReads.read))
   }
 
   //This is mainly used by the driver to construct requests

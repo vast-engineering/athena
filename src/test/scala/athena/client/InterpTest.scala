@@ -8,9 +8,6 @@ import athena.data.CvResult
 class InterpTest extends AthenaTest with WordSpecLike {
 
   import QueryInterpolation._
-  import RowReader._
-
-  case class TestRes(a: String, b: String)
 
   "A query literal" should {
     "work properly" in {
@@ -21,7 +18,7 @@ class InterpTest extends AthenaTest with WordSpecLike {
         val rowMapper = Iteratee.getChunks[CvResult[(Long, String, String)]].map { result =>
           result.map(_.get)
         }
-        val foo = await(cql"select id, first_name, last_name from users where id = $id".as[(Long, String, String)].execute.run(rowMapper))
+        await(cql"select id, first_name, last_name from users where id = $id".as[(Long, String, String)].execute.run(rowMapper))
 
         session.close()
       }
@@ -29,3 +26,4 @@ class InterpTest extends AthenaTest with WordSpecLike {
   }
 
 }
+

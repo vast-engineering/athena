@@ -9,7 +9,8 @@ import scala.annotation.implicitNotFound
 @implicitNotFound(
   "An implicit instance of RowReader could not be found for the type ${A}. If A is a scalar type, ensure that a Reads is available for it. If it's a Tuple, ensure that a Reads is available for each member."
 )
-trait RowReader[A] { self =>
+trait RowReader[A] {
+  self =>
   def read(cvalue: Row): CvResult[A]
 
   def map[B](f: A => B): RowReader[B] = RowReader[B] { row =>
@@ -26,11 +27,17 @@ trait RowReader[A] { self =>
 
 }
 
-object RowReader {
+object RowReader extends DefaultRowReaders with ReaderBuilders {
 
   def apply[T](f: Row => CvResult[T]): RowReader[T] = new RowReader[T] {
     override def read(cvalue: Row): CvResult[T] = f(cvalue)
   }
+
+}
+
+trait DefaultRowReaders {
+
+  import athena.client.util._
 
   def of[T](implicit r: RowReader[T]) = r
 
@@ -58,80 +65,91 @@ object RowReader {
     }
   }
 
-
   implicit object IdentityReads extends RowReader[Row] {
     override def read(row: Row): CvResult[Row] = CvSuccess(row)
   }
 
-  implicit def fromReads[T](implicit r: Reads[T]): RowReader[T] = at[T](0)
+  implicit val unitReads: RowReader[Unit] = RowReader[Unit] { row => CvSuccess(()) }
 
-  import shapeless._
-  import scala.language.implicitConversions
-  import shapeless.Nat._0
-  import ShapelessUtils._
+  implicit def tupleReads[T, L <: HList](implicit ev: Tuple[T], tupler: Tupler.Aux[L, T], hlr: IndexedReaderSource[L]): RowReader[T] = {
+    //start at index 0
+    hlr(0).map[T](l => tupler(l))
+  }
 
-  implicit def rowReaderReducer[H, T, Out0 <: HList](implicit append: Appender.Aux[H, T, Out0]): Reducer.Aux[RowReader, H, T, Out0] = new Reducer[RowReader, H, T] {
-    type Out = Out0
+  implicit def singleReads[T](implicit r: Reads[T]): RowReader[T] = at[T](0)
 
-    override def apply(mh: RowReader[H], mt: RowReader[T]): RowReader[Out] = RowReader[Out0] { row =>
-      val head: CvResult[H] = mh.read(row)
-      val tail: CvResult[T] = mt.read(row)
+
+  trait IndexedReaderSource[L <: HList] {
+    def apply(index: Int): RowReader[L]
+  }
+
+  object IndexedReaderSource {
+    implicit def nilRowReader: IndexedReaderSource[HNil] =
+      new IndexedReaderSource[HNil] {
+        override def apply(index: Int): RowReader[HNil] = RowReader[HNil](_ => CvSuccess(HNil))
+      }
+
+    implicit def indexedReader[H, T <: HList](implicit rh: Reads[H], rt: IndexedReaderSource[T]): IndexedReaderSource[H :: T] = {
+      new IndexedReaderSource[H :: T] {
+        override def apply(index: Int): RowReader[H :: T] = {
+          val headReads = at[H](index)(rh)
+          combine(headReads, rt(index + 1))
+        }
+      }
+    }
+  }
+
+  protected def combine[H, T <: HList](rh: RowReader[H], rt: RowReader[T]): RowReader[H :: T] = {
+    RowReader[H :: T] { row =>
+      val head: CvResult[H] = rh.read(row)
+      val tail: CvResult[T] = rt.read(row)
       (head, tail) match {
         case (CvError(leftError), CvError(rightError)) => CvError(leftError ++ rightError)
         case (left@CvError(_), _) => left
         case (_, right@CvError(_)) => right
         case (CvSuccess(h), CvSuccess(t)) =>
-          CvSuccess(append(h, t))
+          CvSuccess(h :: t)
       }
     }
   }
 
-  implicit class RowReaderOps[A](val ra: RowReader[A]) extends AnyVal {
+}
+
+trait ReaderBuilders {
+  self: DefaultRowReaders =>
+
+  import scala.language.implicitConversions
+  import athena.client.util._
+
+  class ReaderBuilder[T <: HList](rt: RowReader[T]) {
     //The :: operator is right associative, so that the syntax
     // at[Int]("foo") :: at[String]("bar") :: at[Long]("quux")
     // does the right thing in the most efficient manner
     // The expression above should yield a RowReader[Int :: String :: Long :: HNil]
-    def ::[H, Out <: HList](rh: RowReader[H])(implicit reducer: Reducer.Aux[RowReader, H, A, Out]): RowReader[Out] = {
-      reducer(rh, ra)
+    def ::[H](other: RowReader[H]): ReaderBuilder[H :: T] = new ReaderBuilder[H :: T](combine(other, rt))
+
+
+    def hlisted: RowReader[T] = rt
+
+    /**
+    * Get a RowReader[A] where A is the tupled version of this ReaderBuilder's HList type parameter
+    */
+    def tupled(implicit tupler: Tupler[T]): RowReader[tupler.Out] = {
+      rt.map(l => tupler(l))
+    }
+
+    /**
+    * Accept a function of an arity that matches the types in this ReaderBuilder's type parameter
+    * and produce a RowReader for the return type of the supplied function.
+    */
+    def apply[B, F](f: F)(implicit fnhlister: FnHLister.Aux[F, T => B]): RowReader[B] = {
+      rt.map(fnhlister(f))
     }
   }
 
-  implicit class HListReaderOps[L <: HList](val rl: RowReader[L]) extends AnyVal {
-    def tupled(implicit tupler: Tupler[L]): RowReader[tupler.Out] = {
-      rl.map(l => tupler(l))
-    }
-    def transform[A, F](f: F)(implicit fnhlister: FnHListerAux[F, L => A]): RowReader[A] = {
-      rl.map(fnhlister(f))
-    }
-  }
+  implicit def toBuilder[L <: HList](r: RowReader[L]): ReaderBuilder[L] = new ReaderBuilder(r)
+  implicit def scalarToBuilder[A](r: RowReader[A]): ReaderBuilder[A :: HNil] = new ReaderBuilder(r.map(x => x :: HNil))
 
-
-  def read[A <: Product, B](f: B => A)(implicit r: RowReader[B]): RowReader[A] = r.map(f)
-
-  implicit val unitReads: RowReader[Unit] = RowReader[Unit] { row => CvSuccess(()) }
-
-  implicit def tupleReads[T <: Product, L <: HList](implicit tupler: TuplerAux[L, T], hlr: IndexedRowReader[L, _0]): RowReader[T] = {
-    hlr.map[T]((l: L) => tupler(l))
-  }
-
-  implicit def hlistReads[L <: HList](implicit hlr: IndexedRowReader[L, _0]): RowReader[L] = hlr
-
-  //A RowReader that will extract an HList of type L from a row, starting at the column indexed by N
-  trait IndexedRowReader[L <: HList, N <: Nat] extends RowReader[L]
-
-  object IndexedRowReader {
-    implicit def nilRowReader[N <: Nat]: IndexedRowReader[HNil, N] =
-      new IndexedRowReader[HNil, N] {
-        override def read(cvalue: Row): CvResult[HNil] = CvSuccess(HNil)
-      }
-
-    implicit def hlistIndexedRowReader[H, T <: HList, N <: Nat](implicit rh: Reads[H], rt: IndexedRowReader[T, Succ[N]], ti: ToInt[N], reducer: Reducer.Aux[RowReader, H, T, H :: T]): IndexedRowReader[H :: T, N] = {
-      val headReads = at[H](ti.apply())(rh)
-      val reads = reducer(headReads, rt)
-      new IndexedRowReader[H :: T, N] {
-        override def read(cvalue: Row): CvResult[H :: T] = reads.read(cvalue)
-      }
-
-    }
-  }
 }
+
+

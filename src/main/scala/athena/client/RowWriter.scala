@@ -1,5 +1,6 @@
 package athena.client
 
+import athena.client.util._
 import athena.data.{Writes, CValue}
 
 /**
@@ -15,14 +16,13 @@ object RowWriter {
     override def write(t: T): Seq[CValue] = f(t)
   }
 
-  import shapeless._
   import scala.language.implicitConversions
 
   implicit def fromWrites[T](implicit wt: Writes[T]) = RowWriter[T] { t =>
     Seq(wt.writes(t))
   }
 
-  implicit def tupleWriter[T <: Product, L <: HList](implicit hlister: HListerAux[T, L], hlistWriter: RowWriter[L]): RowWriter[T] = RowWriter[T] { t =>
+  implicit def tupleWriter[T <: Product, L <: HList](implicit hlister: HLister.Aux[T, L], hlistWriter: RowWriter[L]): RowWriter[T] = RowWriter[T] { t =>
     hlistWriter.write(hlister(t))
   }
 

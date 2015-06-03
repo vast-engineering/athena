@@ -215,8 +215,6 @@ object Athena {
   class ConnectionException(message: String) extends AthenaException(message)
   class AuthenticationException(message: String, host: InetSocketAddress) extends ConnectionException(s"Authentication error on host $host: $message")
 
-//  class ConnectionAttemptFailedException(val host: String, val port: Int) extends ConnectionException(s"Connection attempt to $host:$port failed")
-
   class NoHostAvailableException(message: String, val errors: Map[InetAddress, Any]) extends AthenaException(message)
 
   class QueryExecutionException(message: String) extends AthenaException(message)
@@ -245,6 +243,8 @@ object Athena {
       s"Cassandra timeout during read query at consistency $consistency ($suffix): $message"
     }
   }
+
+  class RowConversionException(errors: Seq[String]) extends AthenaException(s"Could not parse result row. Errors: - ${errors.mkString(", ")}")
 
   class QueryValidationException(message: String) extends AthenaException(message)
   class InvalidQuerySyntaxException(message: String) extends QueryValidationException(message)
