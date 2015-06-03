@@ -69,12 +69,15 @@ object StatementRunner {
     def foreach(f: A => Unit)(implicit session: Session, ec: ExecutionContext): Future[Unit] = sr.execute |>>> Iteratee.foreach(f)
   }
 
-  implicit class CvResultOps[A](val sr: StatementRunner[Enumerator[CvResult[A]]]) extends AnyVal {
-    def extractValues: StatementRunner[Enumerator[A]] = new StatementRunner[Enumerator[A]] {
-      override def execute(implicit session: Session, ec: ExecutionContext): Enumerator[A] = {
-        sr.execute.map(_.recoverTotal(errors => throw new RowConversionException(errors)))
-      }
+  //Scala 2.10 fails compilation if this is an anonymous class. Sigh.
+  private class ExtractedRunner[A](base: StatementRunner[Enumerator[CvResult[A]]]) extends StatementRunner[Enumerator[A]] {
+    override def execute(implicit session: Session, ec: ExecutionContext): Enumerator[A] = {
+      base.execute.map(_.recoverTotal(errors => throw new RowConversionException(errors)))
     }
+  }
+
+  implicit class CvResultOps[A](val sr: StatementRunner[Enumerator[CvResult[A]]]) extends AnyVal {
+    def extractValues: StatementRunner[Enumerator[A]] = new ExtractedRunner[A](sr)
   }
 
   implicit class SeqOps[A](val sr: StatementRunner[Future[Seq[A]]]) extends AnyVal {
